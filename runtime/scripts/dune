@@ -11,6 +11,10 @@ case "$cmd" in
     runtime/scripts/init.sh
     ;;
 
+  manager|menu)
+    runtime/scripts/manager.sh
+    ;;
+
   start)
     runtime/scripts/start-all.sh
     ;;
@@ -100,6 +104,7 @@ case "$cmd" in
     cat <<'EOF'
 Usage:
   runtime/scripts/dune init
+  runtime/scripts/dune manager
   runtime/scripts/dune start
   runtime/scripts/dune stop
   runtime/scripts/dune status
