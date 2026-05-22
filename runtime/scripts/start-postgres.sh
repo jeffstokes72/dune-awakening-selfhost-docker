@@ -48,22 +48,32 @@ docker run -d \
   "$IMAGE"
 
 echo "Waiting for Postgres..."
+ready=0
 for i in $(seq 1 60); do
-  if docker exec dune-postgres pg_isready -U postgres -d dune >/dev/null 2>&1; then
+  if docker exec dune-postgres pg_isready -h 127.0.0.1 -p 5432 -U postgres -d dune >/dev/null 2>&1; then
+    ready=1
     break
   fi
   sleep 2
 done
 
-docker exec dune-postgres pg_isready -U postgres -d dune
+if [ "$ready" != "1" ]; then
+  echo "Postgres did not become ready in time."
+  echo
+  echo "=== Postgres logs ==="
+  docker logs --tail 200 dune-postgres || true
+  exit 1
+fi
+
+docker exec dune-postgres pg_isready -h 127.0.0.1 -p 5432 -U postgres -d dune
 
 echo
 echo "=== Databases ==="
-docker exec dune-postgres psql -U postgres -d dune -c '\l'
+docker exec dune-postgres psql -h 127.0.0.1 -p 5432 -U postgres -d dune -c '\l'
 
 echo
 echo "=== Roles ==="
-docker exec dune-postgres psql -U postgres -d dune -c '\du'
+docker exec dune-postgres psql -h 127.0.0.1 -p 5432 -U postgres -d dune -c '\du'
 
 echo
 echo "=== Container ==="

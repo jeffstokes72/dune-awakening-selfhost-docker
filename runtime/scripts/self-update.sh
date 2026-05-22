@@ -39,6 +39,7 @@ detect_github_repo() {
 GITHUB_REPO="$(detect_github_repo)"
 GITHUB_API_BASE="${DUNE_SELF_UPDATE_API_BASE:-https://api.github.com}"
 GITHUB_TOKEN="${DUNE_SELF_UPDATE_TOKEN:-}"
+LATEST_TAG_CACHE_FILE="runtime/generated/self-update-latest-tag.txt"
 
 api_get() {
   local path="$1"
@@ -61,6 +62,10 @@ latest_release_json() {
   api_get "/releases/latest"
 }
 
+releases_json() {
+  api_get "/releases?per_page=20"
+}
+
 extract_json_field() {
   local field="$1"
   python3 -c 'import json,sys
@@ -72,11 +77,51 @@ value = data.get(sys.argv[1], "")
 print(value if value is not None else "")' "$field"
 }
 
-latest_release_tag() {
+latest_release_tag_from_releases_list() {
   local json
-  json="$(latest_release_json 2>/dev/null)" || return 1
+  json="$(releases_json 2>/dev/null)" || return 1
   [ -n "$json" ] || return 1
-  printf '%s' "$json" | extract_json_field tag_name
+  printf '%s' "$json" | python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+for release in data:
+    if not isinstance(release, dict):
+        continue
+    if release.get("draft") or release.get("prerelease"):
+        continue
+    tag = release.get("tag_name") or ""
+    if tag:
+        print(tag)
+        raise SystemExit(0)
+raise SystemExit(1)'
+}
+
+cache_latest_release_tag() {
+  local tag="$1"
+  mkdir -p runtime/generated
+  printf '%s\n' "$tag" > "$LATEST_TAG_CACHE_FILE"
+}
+
+read_cached_latest_release_tag() {
+  [ -s "$LATEST_TAG_CACHE_FILE" ] || return 1
+  tr -d '[:space:]' < "$LATEST_TAG_CACHE_FILE"
+}
+
+latest_release_tag() {
+  local json tag
+
+  json="$(latest_release_json 2>/dev/null)" || true
+  if [ -n "$json" ]; then
+    tag="$(printf '%s' "$json" | extract_json_field tag_name 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+      printf '%s' "$tag"
+      return 0
+    fi
+  fi
+
+  latest_release_tag_from_releases_list
 }
 
 release_tarball_url() {
@@ -250,6 +295,7 @@ case "$cmd" in
       exit 2
     fi
 
+    cache_latest_release_tag "$latest"
     print_versions "$latest"
     echo
     if version_newer "$CURRENT_VERSION" "$latest"; then
@@ -268,12 +314,16 @@ case "$cmd" in
       rc=$?
       set -e
       if [ "$rc" -ne 0 ] || [ -z "$tag" ]; then
+        tag="$(read_cached_latest_release_tag 2>/dev/null || true)"
+      fi
+      if [ -z "$tag" ]; then
         echo "Could not resolve the latest stack release."
         echo "If the repo is still private, publish releases first or configure DUNE_SELF_UPDATE_TOKEN."
         exit 2
       fi
     fi
 
+    cache_latest_release_tag "$tag"
     install_release_tag "$tag"
     ;;
 
