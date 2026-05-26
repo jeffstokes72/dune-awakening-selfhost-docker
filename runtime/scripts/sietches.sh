@@ -822,16 +822,35 @@ PY
     done
 
     while [ "$assigned_count" -gt "$target" ]; do
-      remove_partition="$(psql_value "
-        select partition_id
+      remove_row="$(psql_value "
+        select partition_id || '|' || coalesce(server_id, '')
         from dune.world_partition
         where lower(map) = lower('$safe_map')
           and partition_id <> $base_partition
           and coalesce(server_id, '') <> ''
         order by dimension_index desc, partition_id desc
         limit 1;
-      " | tr -d '[:space:]')"
+      ")"
+      remove_partition="$(printf '%s' "$remove_row" | cut -d'|' -f1 | tr -d '[:space:]')"
+      remove_server_id="$(printf '%s' "$remove_row" | cut -d'|' -f2- | tr -d '[:space:]')"
       [ -n "$remove_partition" ] || break
+      base_server_id="$(psql_value "
+        select coalesce(server_id, '')
+        from dune.world_partition
+        where partition_id = $base_partition
+        limit 1;
+      " | tr -d '[:space:]')"
+      if [ -n "$base_server_id" ]; then
+        docker exec dune-postgres psql -U postgres -d dune -v ON_ERROR_STOP=1 -c "
+update dune.encrypted_player_state
+set
+  server_id = '$base_server_id',
+  previous_server_partition_id = $base_partition,
+  return_dimension_index = 0
+where previous_server_partition_id = $remove_partition
+   or server_id = '$remove_server_id';
+" >/dev/null
+      fi
       runtime/scripts/despawn-server.sh "$remove_partition"
       assigned_count=$((assigned_count - 1))
       topology_changed=1

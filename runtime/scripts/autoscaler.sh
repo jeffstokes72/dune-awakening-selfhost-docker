@@ -192,6 +192,56 @@ assigned_server_for_map() {
   "
 }
 
+partition_target_info() {
+  local partition_id="$1"
+  psql_value "
+    select
+      partition_id || '|' ||
+      map || '|' ||
+      coalesce(dimension_index::text, '0') || '|' ||
+      coalesce(server_id, '')
+    from dune.world_partition
+    where partition_id = $partition_id
+    limit 1;
+  "
+}
+
+survival_fallback_target_info() {
+  local home_dimension_index="$1"
+  local row
+
+  if [ -n "$home_dimension_index" ] && printf '%s' "$home_dimension_index" | grep -Eq '^[0-9]+$'; then
+    row="$(psql_value "
+      select
+        partition_id || '|' ||
+        map || '|' ||
+        coalesce(dimension_index::text, '0') || '|' ||
+        coalesce(server_id, '')
+      from dune.world_partition
+      where lower(map) = lower('Survival_1')
+        and dimension_index = $home_dimension_index
+      order by partition_id
+      limit 1;
+    ")"
+    if [ -n "$row" ]; then
+      echo "$row"
+      return 0
+    fi
+  fi
+
+  psql_value "
+    select
+      partition_id || '|' ||
+      map || '|' ||
+      coalesce(dimension_index::text, '0') || '|' ||
+      coalesce(server_id, '')
+    from dune.world_partition
+    where lower(map) = lower('Survival_1')
+    order by dimension_index, partition_id
+    limit 1;
+  "
+}
+
 handle_demand() {
   local map="$1"
   local num="$2"
@@ -331,49 +381,71 @@ scan_idle_servers() {
 
 scan_reconnect_demand() {
   docker exec dune-postgres psql -U postgres -d dune -At -F '|' -c "
-    select distinct ps.server_id
+    select
+      ps.account_id,
+      coalesce(ps.server_id, ''),
+      coalesce(ps.previous_server_partition_id::text, ''),
+      coalesce(ps.home_dimension_index::text, '')
     from dune.player_state ps
     left join dune.farm_state fs on fs.server_id = ps.server_id
-    where coalesce(ps.server_id, '') <> ''
-      and fs.server_id is null
-      and (
-        ps.online_status <> 'Offline'
-        or (
-          ps.reconnect_grace_period_end is not null
-          and ps.reconnect_grace_period_end > (current_timestamp at time zone 'UTC')
-        )
-        or (
-          ps.last_avatar_activity is not null
-          and ps.last_avatar_activity > (current_timestamp - make_interval(secs => ${IDLE_SECONDS}))
-        )
+    where (
+        coalesce(ps.server_id, '') <> ''
+        and fs.server_id is null
+      )
+       or (
+        coalesce(ps.server_id, '') = ''
+        and ps.previous_server_partition_id is not null
       );
-  " | while IFS= read -r stale_server_id; do
-    local map assigned_server running
+  " | while IFS='|' read -r account_id stale_server_id previous_partition_id home_dimension_index; do
+    local target_row target_partition_id target_map target_dimension target_server_id running fallback_row old_server_id
 
-    [ -n "${stale_server_id:-}" ] || continue
-    map="$(map_for_server_id "$stale_server_id" 2>/dev/null || true)"
-    [ -n "$map" ] || continue
+    [ -n "${account_id:-}" ] || continue
+    old_server_id="$stale_server_id"
+    target_row=""
 
-    assigned_server="$(assigned_server_for_map "$map")"
-    running="$(container_count_for_map "$map")"
-
-    if [ -z "$assigned_server" ] && [ "$running" = "0" ]; then
-      echo "SPAWN reconnect map=$map stale_server=$stale_server_id"
-      runtime/scripts/spawn-server.sh "$map" || {
-        echo "ERROR failed to spawn reconnect map=$map"
-        continue
-      }
-      assigned_server="$(assigned_server_for_map "$map")"
+    if [ -n "$previous_partition_id" ]; then
+      target_row="$(partition_target_info "$previous_partition_id")"
     fi
 
-    if [ -n "$assigned_server" ] && [ "$assigned_server" != "$stale_server_id" ]; then
+    if [ -z "$target_row" ]; then
+      target_row="$(survival_fallback_target_info "$home_dimension_index")"
+    fi
+
+    [ -n "$target_row" ] || continue
+    IFS='|' read -r target_partition_id target_map target_dimension target_server_id <<< "$target_row"
+    [ -n "$target_partition_id" ] || continue
+
+    if [ -z "$target_server_id" ]; then
+      if [ "$target_map" = "Survival_1" ] || [ "$target_map" = "Overmap" ]; then
+        target_row="$(partition_target_info "$target_partition_id")"
+        IFS='|' read -r target_partition_id target_map target_dimension target_server_id <<< "$target_row"
+      else
+        running="$(container_count_for_map "$target_map")"
+        if [ "$running" = "0" ]; then
+          echo "SPAWN reconnect partition=$target_partition_id map=$target_map account=$account_id"
+          runtime/scripts/spawn-server.sh "$target_partition_id" || {
+            echo "ERROR failed to spawn reconnect partition=$target_partition_id map=$target_map"
+            continue
+          }
+        fi
+        target_row="$(partition_target_info "$target_partition_id")"
+        IFS='|' read -r target_partition_id target_map target_dimension target_server_id <<< "$target_row"
+      fi
+    fi
+
+    [ -n "$target_server_id" ] || continue
+
+    if [ "$target_server_id" != "$old_server_id" ] || [ "$previous_partition_id" != "$target_partition_id" ] || [ "$target_dimension" != "$home_dimension_index" ]; then
       psql_value "
         update dune.encrypted_player_state
-        set server_id = '$assigned_server'
-        where server_id = '$stale_server_id';
+        set
+          server_id = '$target_server_id',
+          previous_server_partition_id = $target_partition_id,
+          return_dimension_index = $target_dimension
+        where account_id = $account_id;
       " >/dev/null
-      echo "REMAP reconnect map=$map from=$stale_server_id to=$assigned_server"
-      remember_server_id_map "$map" "$assigned_server"
+      echo "REMAP reconnect account=$account_id map=$target_map partition=$target_partition_id from=${old_server_id:-<empty>} to=$target_server_id"
+      remember_server_id_map "$target_map" "$target_server_id"
     fi
   done
 }
