@@ -5,6 +5,7 @@ cd "$(dirname "$0")/../.."
 
 DUNE="runtime/scripts/dune"
 USERSETTINGS_PY="runtime/scripts/usersettings.py"
+ADMIN_ITEMS_FILE="runtime/data/admin-items.json"
 source runtime/scripts/runtime-env.sh
 MENU_INTERRUPTED=0
 ACTION_CANCELLED=0
@@ -1600,6 +1601,9 @@ map_is_dedicated_scaling() {
 
 map_supports_active_dimensions() {
   local map="$1"
+  case "$map" in
+    Survival_1|DeepDesert_1) return 0 ;;
+  esac
   [ "$map" != "Overmap" ] && ! map_is_dedicated_scaling "$map"
 }
 
@@ -2155,6 +2159,338 @@ delete_all_backups_flow() {
   fi
 }
 
+admin_items_available() {
+  if [ ! -r "$ADMIN_ITEMS_FILE" ]; then
+    error_msg "Missing readable item dataset: $ADMIN_ITEMS_FILE"
+    echo "Admin Tools requires the vendored item dataset."
+    return 1
+  fi
+}
+
+admin_validate_quantity() {
+  local quantity="$1"
+  if ! printf '%s' "$quantity" | grep -Eq '^[1-9][0-9]*$'; then
+    error_msg "Quantity must be a positive integer."
+    return 1
+  fi
+}
+
+admin_validate_durability() {
+  local durability="$1"
+  python3 - "$durability" <<'PY'
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if 0 <= value <= 1 else 1)
+PY
+}
+
+admin_item_category_rows() {
+  python3 - "$ADMIN_ITEMS_FILE" <<'PY'
+import json
+import sys
+from collections import Counter
+
+items_path = sys.argv[1]
+with open(items_path, encoding="utf-8") as f:
+    items = json.load(f)
+
+counts = Counter(str(item.get("category") or "uncategorized") for item in items)
+print("Templates\ttemplates\t1")
+for category, count in sorted(counts.items(), key=lambda row: row[0].casefold()):
+    label = category[:1].upper() + category[1:]
+    print(f"{label}\t{category}\t{count}")
+PY
+}
+
+admin_items_by_category_rows() {
+  local category="$1"
+  python3 - "$ADMIN_ITEMS_FILE" "$category" <<'PY'
+import json
+import sys
+
+items_path, category = sys.argv[1], sys.argv[2]
+wanted = category.casefold()
+
+if wanted == "templates":
+    print("\t".join(["TEMPLATE_SCOUT_ORNITHOPTER_MK6", "Scout Ornithopter Mk6", "Templates", "Template"]))
+    raise SystemExit(0)
+
+with open(items_path, encoding="utf-8") as f:
+    items = json.load(f)
+
+rows = [
+    item for item in items
+    if str(item.get("category") or "uncategorized").casefold() == wanted
+]
+
+for item in sorted(rows, key=lambda value: (str(value.get("source") or "").casefold(), str(value.get("name") or "").casefold())):
+    category_value = str(item.get("category") or "")
+    category_label = category_value[:1].upper() + category_value[1:]
+    fields = [
+        str(item.get("id") or ""),
+        str(item.get("name") or ""),
+        category_label,
+        str(item.get("source") or ""),
+    ]
+    print("\t".join(field.replace("\t", " ") for field in fields))
+PY
+}
+
+admin_online_player_rows() {
+  docker exec dune-postgres psql -U dune -d dune -At -F $'\t' -c "
+    select
+      coalesce(nullif(a.\"user\", ''), nullif(a.funcom_id, '')) as fls_id,
+      ps.account_id,
+      coalesce(nullif(ps.character_name, ''), '<unknown>') as character_name,
+      coalesce(ps.online_status::text, '') as online_status,
+      coalesce(fs.map, wp.map, '') as map,
+      coalesce(ps.server_id, '') as server_id
+    from dune.player_state ps
+    left join dune.accounts a on a.id = ps.account_id
+    left join dune.farm_state fs on fs.server_id = ps.server_id
+    left join dune.world_partition wp on wp.partition_id = ps.previous_server_partition_id
+    where ps.online_status <> 'Offline'
+      or (
+        ps.reconnect_grace_period_end is not null
+        and ps.reconnect_grace_period_end > (current_timestamp at time zone 'UTC')
+      )
+      or (
+        ps.last_avatar_activity is not null
+        and ps.last_avatar_activity > (current_timestamp - interval '5 minutes')
+      )
+    order by lower(coalesce(nullif(ps.character_name, ''), ps.account_id::text));
+  " 2>/dev/null || true
+}
+
+admin_choose_player() {
+  local rows=()
+  local choice row fls_id account_id character_name online_status map_name server_id manual_id
+  local i
+
+  if ! docker inspect -f '{{.State.Running}}' dune-postgres 2>/dev/null | grep -qx 'true'; then
+    error_msg "Postgres container is not running, so online players cannot be listed."
+    prompt_text "Enter Player FLS ID manually, or * for all online players:" manual_id || return 1
+    ADMIN_SELECTED_PLAYER_ID="$manual_id"
+    ADMIN_SELECTED_PLAYER_LABEL="$manual_id"
+    return 0
+  fi
+
+  mapfile -t rows < <(admin_online_player_rows)
+
+  echo
+  echo "Select Player To Grant Items"
+  echo "============================"
+  echo
+  if [ "${#rows[@]}" -eq 0 ]; then
+    echo "No online players found."
+    echo
+  else
+    for i in "${!rows[@]}"; do
+      IFS=$'\t' read -r fls_id account_id character_name online_status map_name server_id <<< "${rows[$i]}"
+      printf '%s) %s\n' "$((i + 1))" "$character_name"
+      printf '   FLS ID: %s\n' "${fls_id:-unknown}"
+      printf '   local account id: %s\n' "$account_id"
+      printf '   status: %s\n' "${online_status:-unknown}"
+      [ -z "${map_name:-}" ] || printf '   map: %s\n' "$map_name"
+      [ -z "${server_id:-}" ] || printf '   server: %s\n' "$server_id"
+      echo
+    done
+  fi
+  echo "A) All online players (*)"
+  echo "M) Manual FLS ID"
+  echo "0) Back"
+  echo
+
+  prompt_text "Player Selection:" choice || return 1
+  choice="$(sanitize_numeric_prompt_value "$choice")"
+  case "$choice" in
+    0)
+      return 1
+      ;;
+    A|a)
+      ADMIN_SELECTED_PLAYER_ID="*"
+      ADMIN_SELECTED_PLAYER_LABEL="All online players (*)"
+      return 0
+      ;;
+    M|m)
+      prompt_text "Player FLS ID, or * for all online players:" manual_id || return 1
+      ADMIN_SELECTED_PLAYER_ID="$manual_id"
+      ADMIN_SELECTED_PLAYER_LABEL="$manual_id"
+      return 0
+      ;;
+  esac
+
+  if ! printf '%s' "$choice" | grep -Eq '^[1-9][0-9]*$' || [ "$choice" -gt "${#rows[@]}" ]; then
+    error_msg "Invalid player selection."
+    return 1
+  fi
+
+  row="${rows[$((choice - 1))]}"
+  IFS=$'\t' read -r fls_id account_id character_name online_status map_name server_id <<< "$row"
+  if [ -z "${fls_id:-}" ]; then
+    error_msg "Selected player has no FLS id in dune.accounts."
+    echo "Use Manual FLS ID if you know it."
+    return 1
+  fi
+  ADMIN_SELECTED_PLAYER_ID="$fls_id"
+  ADMIN_SELECTED_PLAYER_LABEL="$character_name ($fls_id)"
+}
+
+admin_grant_item_flow() {
+  local player_id player_label choice quantity durability
+  local category_rows=()
+  local item_rows=()
+  local row item_id item_name item_category item_source category_label category_name category_count
+
+  admin_items_available || return 1
+
+  ADMIN_SELECTED_PLAYER_ID=""
+  ADMIN_SELECTED_PLAYER_LABEL=""
+  admin_choose_player || return
+  player_id="$ADMIN_SELECTED_PLAYER_ID"
+  player_label="$ADMIN_SELECTED_PLAYER_LABEL"
+
+  echo
+  mapfile -t category_rows < <(admin_item_category_rows)
+  if [ "${#category_rows[@]}" -eq 0 ]; then
+    echo "No item categories found in $ADMIN_ITEMS_FILE"
+    return 1
+  fi
+
+  echo
+  echo "Select Item Category"
+  echo "===================="
+  echo
+  local i
+  for i in "${!category_rows[@]}"; do
+    IFS=$'\t' read -r category_label category_name category_count <<< "${category_rows[$i]}"
+    printf '%s) %s (%s)\n' "$((i + 1))" "$category_label" "$category_count"
+  done
+  echo "0) Back"
+  echo
+
+  prompt_text "Category Number:" choice || return
+  choice="$(sanitize_numeric_prompt_value "$choice")"
+  if [ "$choice" = "0" ]; then
+    return 0
+  fi
+  if ! printf '%s' "$choice" | grep -Eq '^[1-9][0-9]*$' || [ "$choice" -gt "${#category_rows[@]}" ]; then
+    error_msg "Invalid category selection."
+    return 1
+  fi
+
+  row="${category_rows[$((choice - 1))]}"
+  IFS=$'\t' read -r category_label category_name category_count <<< "$row"
+
+  mapfile -t item_rows < <(admin_items_by_category_rows "$category_name")
+  if [ "${#item_rows[@]}" -eq 0 ]; then
+    echo "No items found in category: $category_name"
+    return 1
+  fi
+
+  echo
+  echo "Select Item From $category_label"
+  echo "==============================="
+  echo
+  for i in "${!item_rows[@]}"; do
+    IFS=$'\t' read -r item_id item_name item_category item_source <<< "${item_rows[$i]}"
+    printf '%s) %s\n' "$((i + 1))" "$item_name"
+    printf '   category: %s\n' "$item_category"
+    printf '   source: %s\n' "$item_source"
+    echo
+  done
+  echo "0) Back"
+  echo
+
+  prompt_text "Item Number:" choice || return
+  choice="$(sanitize_numeric_prompt_value "$choice")"
+  if [ "$choice" = "0" ]; then
+    return 0
+  fi
+  if ! printf '%s' "$choice" | grep -Eq '^[1-9][0-9]*$' || [ "$choice" -gt "${#item_rows[@]}" ]; then
+    error_msg "Invalid item selection."
+    return 1
+  fi
+
+  row="${item_rows[$((choice - 1))]}"
+  IFS=$'\t' read -r item_id item_name item_category item_source <<< "$row"
+
+  if [ "$item_id" = "TEMPLATE_SCOUT_ORNITHOPTER_MK6" ]; then
+    echo
+    echo "Grant template now?"
+    echo "  Player: $player_label"
+    echo "  PlayerId: $player_id"
+    echo "  Template: Scout Ornithopter Mk6"
+    echo "  Components:"
+    echo "    1x Scout Ornithopter Chassis Mk6"
+    echo "    1x Scout Ornithopter Cockpit Mk6"
+    echo "    1x Scout Ornithopter Engine Mk6"
+    echo "    1x Scout Ornithopter Generator Mk6"
+    echo "    1x Scout Ornithopter Hull Mk6"
+    echo "    4x Scout Ornithopter Wing Mk6"
+    echo "    1x Scout Ornithopter Thruster Mk6"
+    echo "    1x Scout Ornithopter Storage Mk4"
+    echo "    5x Large Vehicle Fuel Cell"
+    echo "    1x Welding Torch Mk5"
+    echo
+
+    if confirm "Publish this live template grant"; then
+      run_cmd "$DUNE" admin grant-template "$player_id" scout-ornithopter-mk6
+    else
+      echo "Cancelled."
+    fi
+    return 0
+  fi
+
+  prompt_text "Quantity [1]:" quantity allow-empty || return
+  quantity="$(sanitize_numeric_prompt_value "${quantity:-}")"
+  quantity="${quantity:-1}"
+  admin_validate_quantity "$quantity" || return 1
+
+  prompt_text "Durability [1.0]:" durability allow-empty || return
+  durability="$(sanitize_numeric_prompt_value "${durability:-}")"
+  durability="${durability:-1.0}"
+  if ! admin_validate_durability "$durability"; then
+    error_msg "Durability must be a number between 0 and 1."
+    return 1
+  fi
+
+  echo
+  echo "Grant item now?"
+  echo "  Player: $player_label"
+  echo "  PlayerId: $player_id"
+  echo "  Item: $item_name"
+  echo "  Category: $item_category"
+  echo "  Source: $item_source"
+  echo "  Quantity: $quantity"
+  echo "  Durability: $durability"
+  echo
+
+  if confirm "Publish this live item grant"; then
+    run_cmd "$DUNE" admin grant-item-id "$player_id" "$item_id" "$quantity" "$durability"
+  else
+    echo "Cancelled."
+  fi
+}
+
+admin_tools_menu() {
+  local choice
+  while true; do
+    menu_or_back "Admin Tools" \
+      "Grant Item" \
+      "Back" || return
+    choice="$MENU_CHOICE"
+
+    case "$choice" in
+      1) admin_grant_item_flow; pause ;;
+      2) return ;;
+    esac
+  done
+}
+
 main_menu() {
   local choice
   while true; do
@@ -2165,6 +2501,7 @@ main_menu() {
       "Sietches" \
       "Updates" \
       "Logs" \
+      "Admin Tools" \
       "Advanced Tools" \
       "Exit"
     local rc=$?
@@ -2181,8 +2518,9 @@ main_menu() {
       3) sietches_menu ;;
       4) updates_menu ;;
       5) logs_menu ;;
-      6) advanced_menu ;;
-      7) echo "Goodbye."; exit 0 ;;
+      6) admin_tools_menu ;;
+      7) advanced_menu ;;
+      8) echo "Goodbye."; exit 0 ;;
     esac
   done
 }

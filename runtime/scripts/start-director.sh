@@ -122,7 +122,13 @@ NumExtraServers=0
 [CB_Overland_S_07]
 NumExtraServers=0
 
+[CB_Overland_S_08]
+NumExtraServers=0
+
 [CB_Story_BanditFortress01]
+NumExtraServers=0
+
+[CB_Dungeon_ThePit]
 NumExtraServers=0
 
 [SH_Arrakeen]

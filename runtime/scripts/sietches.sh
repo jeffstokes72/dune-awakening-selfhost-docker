@@ -23,23 +23,31 @@ if not config_path.exists():
 
 config = json.loads(config_path.read_text())
 maps_cfg = config.setdefault("maps", {})
-survival = maps_cfg.setdefault("Survival_1", {})
 changed = False
 
-explicit = survival.get("active_dimensions_explicit")
-if explicit is None:
-    survival["active_dimensions_explicit"] = False
-    explicit = False
-    changed = True
+for map_name in ("Survival_1", "DeepDesert_1"):
+    entry = maps_cfg.setdefault(map_name, {})
+    explicit = entry.get("active_dimensions_explicit")
+    if explicit is None:
+        entry["active_dimensions_explicit"] = False
+        explicit = False
+        changed = True
 
-explicit = str(explicit).strip().lower() in {"1", "true", "yes", "on"}
-if not explicit and int(survival.get("active_dimensions") or 1) != 1:
-    survival["active_dimensions"] = 1
-    changed = True
+    explicit = str(explicit).strip().lower() in {"1", "true", "yes", "on"}
+    if not explicit and int(entry.get("active_dimensions") or 1) != 1:
+        entry["active_dimensions"] = 1
+        changed = True
 
 if changed:
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
 PY
+}
+
+map_supports_configurable_active_dimensions() {
+  case "$1" in
+    Survival_1|DeepDesert_1) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 prune_orphan_partition_config() {
@@ -325,12 +333,15 @@ for name in order:
     if name == "Overmap":
         active_dimensions = "1"
         kind = "Always-On"
-    elif dedicated:
+    elif dedicated and name != "DeepDesert_1":
         active_dimensions = "Managed"
         kind = "Dedicated Scaling"
     elif name == "Survival_1":
         active_dimensions = str(int(map_config.get("active_dimensions") or min(max_dimensions, catalog_max)))
         kind = "Always-On"
+    elif name == "DeepDesert_1":
+        active_dimensions = str(int(map_config.get("active_dimensions") or min(max_dimensions, catalog_max)))
+        kind = "Dedicated Scaling"
     else:
         active_dimensions = str(int(map_config.get("active_dimensions") or min(max_dimensions, catalog_max)))
         kind = "Dynamic"
@@ -414,11 +425,14 @@ max_dimensions = int(map_config.get("max_dimensions") or len(rows))
 if name == "Overmap":
     kind = "Always-On"
     active = "1"
-elif dedicated:
+elif dedicated and name != "DeepDesert_1":
     kind = "Dedicated Scaling"
     active = "Managed"
 elif name == "Survival_1":
     kind = "Always-On"
+    active = str(int(map_config.get("active_dimensions") or min(max_dimensions, len(rows))))
+elif name == "DeepDesert_1":
+    kind = "Dedicated Scaling"
     active = str(int(map_config.get("active_dimensions") or min(max_dimensions, len(rows))))
 else:
     kind = "Dynamic"
@@ -505,7 +519,7 @@ map_config = config.get("maps", {}).get(rows[0].get("map"), {})
 max_dimensions = int(map_config.get("max_dimensions") or len(rows))
 if rows[0].get("map") == "Overmap":
     active_dimensions = 1
-elif dedicated:
+elif dedicated and rows[0].get("map") != "DeepDesert_1":
     active_dimensions = len(rows)
 else:
     active_dimensions = int(map_config.get("active_dimensions") or min(max_dimensions, len(rows)))
@@ -594,10 +608,10 @@ if name == "Overmap":
     raise SystemExit(1)
 if key == "active_dimensions":
     raw = next((server.get("raw", {}) for server in servers if str(server.get("map", "")).lower() == name.lower()), {})
-    if raw.get("dedicatedScaling"):
+    if raw.get("dedicatedScaling") and name != "DeepDesert_1":
         print(f"{name} has dedicated scaling enabled; active dimensions are managed at runtime.", file=sys.stderr)
         raise SystemExit(1)
-if value > catalog_max and not (key == "active_dimensions" and name == "Survival_1" and value <= max_dimensions):
+if value > catalog_max and not (key == "active_dimensions" and name in {"Survival_1", "DeepDesert_1"} and value <= max_dimensions):
     print(f"{name} currently has {catalog_max} available partition(s).", file=sys.stderr)
     print("Increasing beyond that requires regenerating and applying world partitions, which this command will not do automatically.", file=sys.stderr)
     raise SystemExit(1)
@@ -790,7 +804,7 @@ PY
     return 0
   fi
 
-  if [ "$map" = "Survival_1" ]; then
+  if map_supports_configurable_active_dimensions "$map"; then
     ensure_map_partitions "$map" "$target"
     if [ "${ENSURE_MAP_PARTITIONS_CHANGED:-0}" -eq 1 ]; then
       topology_changed=1
@@ -812,7 +826,7 @@ PY
   assigned_count="$(psql_value "select count(*) from dune.world_partition where lower(map) = lower('$safe_map') and coalesce(server_id, '') <> '';" | tr -d '[:space:]')"
   [ -n "$assigned_count" ] || assigned_count=0
 
-  if [ "$map" = "Survival_1" ]; then
+  if map_supports_configurable_active_dimensions "$map"; then
     mapfile -t survival_partitions < <(psql_value "
       select partition_id || '|' || coalesce(server_id, '')
       from dune.world_partition

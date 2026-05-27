@@ -139,8 +139,56 @@ publish_payload() {
     payload="$payload" >/dev/null
 }
 
+heal_survival_alive_state() {
+  local live_server_ids sql
+
+  live_server_ids="$(
+    docker exec dune-rmq-game rabbitmqctl list_connections user state 2>/dev/null \
+      | awk '$1 ~ /^sg[.]/ && $2 == "running" { split($1, parts, "."); if (length(parts) >= 2) print parts[length(parts) - 1] }' \
+      | sort -u
+  )" || true
+
+  [ -n "$live_server_ids" ] || return 0
+
+  sql="$(LIVE_SERVER_IDS="$live_server_ids" python3 - <<'PY'
+import os
+
+ids = [line.strip() for line in os.environ.get("LIVE_SERVER_IDS", "").splitlines() if line.strip()]
+if not ids:
+    raise SystemExit(0)
+
+def quote(value):
+    return "'" + value.replace("'", "''") + "'"
+
+values = ", ".join(f"({quote(server_id)})" for server_id in ids)
+print(f"""
+with live_server(server_id) as (
+  values {values}
+)
+update dune.farm_state fs
+set alive = true
+from live_server ls
+where fs.server_id = ls.server_id
+  and fs.map = 'Survival_1'
+  and fs.ready = true
+  and fs.alive = false
+  and exists (
+    select 1
+    from dune.world_partition wp
+    where wp.server_id = fs.server_id
+      and wp.map = 'Survival_1'
+  );
+""")
+PY
+)"
+
+  [ -n "$sql" ] || return 0
+  docker exec dune-postgres psql -U postgres -d dune -qAt -c "$sql" >/dev/null 2>&1 || true
+}
+
 publish_snapshot_once() {
   local rows
+  heal_survival_alive_state
   rows="$(python3 - <<'PY'
 import json
 import subprocess

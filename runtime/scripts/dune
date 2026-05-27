@@ -150,6 +150,11 @@ case "$cmd" in
     runtime/scripts/sietches.sh "$@"
     ;;
 
+  admin)
+    shift || true
+    runtime/scripts/admin-tools.sh "$@"
+    ;;
+
   help|--help|-h)
     cat <<'EOF'
 Usage:
@@ -197,6 +202,11 @@ Usage:
   runtime/scripts/dune sietches set-active <map-name> <count>
   runtime/scripts/dune sietches set-display <partition-id> <display-name>
   runtime/scripts/dune sietches set-password <partition-id> [password]
+  runtime/scripts/dune admin item-search <query>
+  runtime/scripts/dune admin item-list [category]
+  runtime/scripts/dune admin grant-item <player-id|*> <item-name> [quantity] [durability]
+  runtime/scripts/dune admin grant-item-id <player-id|*> <item-id> [quantity] [durability]
+  runtime/scripts/dune admin grant-template <player-id|*> scout-ornithopter-mk6
 
 Services for logs/restart:
   postgres

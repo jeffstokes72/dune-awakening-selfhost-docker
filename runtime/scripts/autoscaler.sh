@@ -5,6 +5,7 @@ cd "$(dirname "$0")/../.."
 
 INTERVAL="${DUNE_AUTOSCALER_INTERVAL:-5}"
 SINCE="${DUNE_AUTOSCALER_LOG_SINCE:-30s}"
+NAMED_DESTINATION_SINCE="${DUNE_AUTOSCALER_NAMED_DESTINATION_LOG_SINCE:-10m}"
 IDLE_SECONDS="${DUNE_AUTOSCALER_IDLE_SECONDS:-300}"
 TRAVEL_GRACE_SECONDS="${DUNE_AUTOSCALER_TRAVEL_GRACE_SECONDS:-120}"
 STATE_FILE="${DUNE_AUTOSCALER_STATE_FILE:-runtime/generated/autoscaler-idle.tsv}"
@@ -22,6 +23,7 @@ echo "=== Dune Docker autoscaler ==="
 echo "Watching Director travel queues and idle dynamic servers."
 echo "Interval: ${INTERVAL}s"
 echo "Log window: ${SINCE}"
+echo "Named destination log window: ${NAMED_DESTINATION_SINCE}"
 echo "Idle despawn grace: ${IDLE_SECONDS}s"
 echo "Travel grace: ${TRAVEL_GRACE_SECONDS}s"
 echo "State file: ${STATE_FILE}"
@@ -39,6 +41,119 @@ fi
 
 psql_value() {
   docker exec dune-postgres psql -U postgres -d dune -Atc "$1"
+}
+
+hub_origin_id_for_map() {
+  case "$1" in
+    SH_Arrakeen) echo "SH_Arrakeen3" ;;
+    SH_HarkoVillage) echo "SH_HarkoVillage4" ;;
+    *) return 1 ;;
+  esac
+}
+
+hub_server_id_for_origin_id() {
+  case "$1" in
+    SH_Arrakeen3) echo "mr2tVhMST9mp8k1NDnx49Q" ;;
+    SH_HarkoVillage4)
+      psql_value "
+        select coalesce(server_id, '')
+        from dune.farm_state
+        where map = 'SH_HarkoVillage'
+        limit 1;
+      "
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+publish_rmq_json() {
+  local exchange="$1"
+  local routing_key="$2"
+  local payload_json="$3"
+  local label="$4"
+  local payload_b64 eval_code output
+
+  payload_b64="$(printf '%s' "$payload_json" | base64 -w0)"
+  eval_code='Payload = base64:decode(<<"'"$payload_b64"'">>), XName = rabbit_misc:r(<<"/">>, exchange, <<"'"$exchange"'">>), X = rabbit_exchange:lookup_or_die(XName), MsgId = list_to_binary("'"$label"'-" ++ integer_to_list(erlang:system_time(millisecond))), P = {list_to_atom("P_basic"), <<"application/json">>, undefined, [], undefined, undefined, undefined, undefined, undefined, MsgId, undefined, undefined, <<"fls">>, <<"dune_autoscaler">>, undefined}, Content = rabbit_basic:build_content(P, Payload), {ok, Msg} = rabbit_basic:message(XName, <<"'"$routing_key"'">>, Content), Result = rabbit_queue_type:publish_at_most_once(X, Msg), io:format("publish=~p exchange='"$exchange"' routing='"$routing_key"' label='"$label"'~n", [Result]).'
+  output="$(docker exec dune-rmq-game rabbitmqctl eval "$eval_code" 2>&1)"
+  if [[ "$output" != *"publish=ok"* ]]; then
+    echo "ERROR failed to publish $label via exchange=$exchange routing=$routing_key"
+    echo "$output"
+    return 1
+  fi
+}
+
+replay_hagga_travel_handoff() {
+  local flow_id="$1"
+  local source_map="$2"
+  local destination_name="$3"
+  local director_log_file origin_id origin_server_id replay_rows
+
+  case "$destination_name" in
+    Travel_To_HaggaBasin_*|Travel_To_Hagga_Basin_*) ;;
+    *) return 0 ;;
+  esac
+
+  origin_id="$(hub_origin_id_for_map "$source_map" 2>/dev/null || true)"
+  [ -n "$origin_id" ] || return 0
+  origin_server_id="$(hub_server_id_for_origin_id "$origin_id" 2>/dev/null || true)"
+  [ -n "$origin_server_id" ] || return 0
+
+  director_log_file="$(mktemp)"
+  docker logs --since "$NAMED_DESTINATION_SINCE" dune-director > "$director_log_file" 2>&1 || true
+  replay_rows="$(FLOW_ID="$flow_id" ORIGIN_ID="$origin_id" LOG_FILE="$director_log_file" python3 - <<'PY'
+import base64
+import json
+import os
+import re
+
+flow_id = os.environ.get("FLOW_ID", "")
+origin_id = os.environ.get("ORIGIN_ID", "")
+log_file = os.environ.get("LOG_FILE", "")
+response_re = re.compile(r'Notified player\(s\) of travel response (\S+): (\{.*\})')
+grant_re = re.compile(r'Notified player of travel grant (\S+): (\{.*\})')
+
+rows = []
+
+with open(log_file, encoding="utf-8", errors="replace") as f:
+    for line in f:
+        if flow_id not in line:
+            continue
+        for kind, regex, map_key in (
+            ("response", response_re, "MapName"),
+            ("grant", grant_re, "Map"),
+        ):
+            match = regex.search(line)
+            if not match:
+                continue
+            if match.group(1) != origin_id:
+                continue
+            try:
+                payload = json.loads(match.group(2))
+            except json.JSONDecodeError:
+                continue
+            if payload.get("RequestID") != flow_id:
+                continue
+            payload[map_key] = "HaggaBasin"
+            encoded = base64.b64encode(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).decode("ascii")
+            print(f"{kind}|{encoded}")
+PY
+  )"
+  rm -f "$director_log_file"
+
+  while IFS='|' read -r kind payload_b64; do
+    [ -n "${kind:-}" ] || continue
+    case "$kind" in
+      response)
+        publish_rmq_json "heartbeats" "$origin_server_id" "$(printf '%s' "$payload_b64" | base64 -d)" "travel-${kind}-${flow_id}" || true
+        echo "REPLAY travel flow=$flow_id kind=$kind server=$origin_server_id map=HaggaBasin"
+        ;;
+      grant)
+        publish_rmq_json "heartbeats" "$origin_server_id" "$(printf '%s' "$payload_b64" | base64 -d)" "travel-${kind}-${flow_id}" || true
+        echo "REPLAY travel flow=$flow_id kind=$kind server=$origin_server_id map=HaggaBasin"
+        ;;
+    esac
+  done <<< "$replay_rows"
 }
 
 map_uses_dedicated_scaling() {
@@ -133,6 +248,34 @@ PY
   "
 }
 
+active_dimensions_for_map() {
+  local map="$1"
+  local configured
+
+  configured="$(python3 - "$map" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+target = sys.argv[1]
+config_path = Path("runtime/generated/sietch-config.json")
+if not config_path.exists():
+    raise SystemExit
+config = json.loads(config_path.read_text())
+value = config.get("maps", {}).get(target, {}).get("active_dimensions")
+if value:
+    print(value)
+PY
+  )"
+
+  if [ -n "$configured" ]; then
+    echo "$configured"
+    return 0
+  fi
+
+  echo "1"
+}
+
 state_key() {
   local map="$1"
   local server_id="$2"
@@ -221,11 +364,247 @@ remember_hub_travel() {
   mv "$tmp" "$HUB_TRAVEL_FILE"
 }
 
+survival_partition_target_json() {
+  python3 - <<'PY'
+import json
+import subprocess
+
+sql = """
+select
+  wp.partition_id,
+  coalesce(wp.dimension_index, 0),
+  coalesce(fs.game_port, 0),
+  trim(leading '(' from split_part(fs.game_addr::text, ',', 1)) as game_addr
+from dune.world_partition wp
+join dune.farm_state fs on fs.server_id = wp.server_id
+where wp.map = 'Survival_1'
+  and fs.ready = true
+  and fs.alive = true
+order by wp.partition_id
+limit 1;
+"""
+proc = subprocess.run(
+    ["docker", "exec", "dune-postgres", "psql", "-U", "postgres", "-d", "dune", "-AtF", "|", "-c", sql],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+row = proc.stdout.strip()
+if not row:
+    raise SystemExit(1)
+partition_id, dimension, port, ip = row.split("|", 3)
+print(json.dumps({
+    "partition_id": int(partition_id),
+    "dimension": int(dimension),
+    "port": int(port),
+    "ip": ip.split("/")[0],
+}))
+PY
+}
+
+scan_proactive_hagga_handoffs() {
+  local director_log_file proactive_rows target_json
+
+  target_json="$(survival_partition_target_json 2>/dev/null || true)"
+  [ -n "$target_json" ] || return 0
+
+  director_log_file="$(mktemp)"
+  docker logs --since "$SINCE" dune-director > "$director_log_file" 2>&1 || true
+  proactive_rows="$(TARGET_JSON="$target_json" LOG_FILE="$director_log_file" python3 - <<'PY'
+import json
+import os
+import re
+from datetime import datetime, timedelta, timezone
+
+target = json.loads(os.environ["TARGET_JSON"])
+log_file = os.environ["LOG_FILE"]
+response_re = re.compile(r'Notified player\(s\) "([^"]+)" of travel response (SH_Arrakeen3|SH_HarkoVillage4): (\{.*\})')
+
+with open(log_file, encoding="utf-8", errors="replace") as f:
+    for line in f:
+        match = response_re.search(line)
+        if not match:
+            continue
+        player_id = match.group(1)
+        origin_id = match.group(2)
+        try:
+            payload = json.loads(match.group(3))
+        except json.JSONDecodeError:
+            continue
+        if payload.get("Code") != 1:
+            continue
+        if payload.get("MapName") != "Survival_1":
+            continue
+        flow_id = payload.get("RequestID") or ""
+        if not flow_id:
+            continue
+        response_payload = dict(payload)
+        response_payload["MapName"] = "HaggaBasin"
+
+        grant_payload = {
+            "Map": "HaggaBasin",
+            "Dimension": target["dimension"],
+            "PartitionId": target["partition_id"],
+            "Port": target["port"],
+            "Expiration": (datetime.now(timezone.utc) + timedelta(minutes=3)).isoformat().replace("+00:00", "Z"),
+            "RequestToken": payload.get("QueueToken") or 0,
+            "OriginId": origin_id,
+            "RequestID": flow_id,
+            "Players": [{"Id": player_id, "TargetDimension": target["dimension"]}],
+            "Flow": 1,
+            "ServerLoginToken": payload.get("ServerLoginToken") or "",
+            "ReturnDimension": None,
+            "Ip": target["ip"],
+        }
+
+        print("{}|{}|{}".format(
+            flow_id,
+            origin_id,
+            json.dumps({
+                "response": response_payload,
+                "grant": grant_payload,
+            }, separators=(",", ":"), ensure_ascii=False),
+        ))
+PY
+  )"
+  rm -f "$director_log_file"
+
+  while IFS='|' read -r flow_id origin_id payload_json; do
+    [ -n "${flow_id:-}" ] || continue
+    hub_travel_seen "$flow_id" && continue
+
+    local response_json grant_json origin_server_id
+    origin_server_id="$(hub_server_id_for_origin_id "$origin_id" 2>/dev/null || true)"
+    [ -n "$origin_server_id" ] || continue
+
+    response_json="$(python3 - "$payload_json" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+print(json.dumps(payload["response"], separators=(",", ":"), ensure_ascii=False))
+PY
+)"
+    grant_json="$(python3 - "$payload_json" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+print(json.dumps(payload["grant"], separators=(",", ":"), ensure_ascii=False))
+PY
+)"
+
+    publish_rmq_json "heartbeats" "$origin_server_id" "$response_json" "travel-response-${flow_id}" || true
+    publish_rmq_json "heartbeats" "$origin_server_id" "$grant_json" "travel-grant-${flow_id}" || true
+    remember_hub_travel "$flow_id" "0" "$origin_id" "HaggaBasin" "$(date +%s)"
+    echo "PROACTIVE-HAGGA flow=$flow_id origin=$origin_id server=$origin_server_id map=HaggaBasin"
+  done <<< "$proactive_rows"
+}
+
+follow_director_hagga_handoffs() {
+  while true; do
+    docker logs -f --since 0s dune-director 2>&1 | TARGET_JSON="$(survival_partition_target_json 2>/dev/null || true)" python3 -u - <<'PY' | while IFS='|' read -r flow_id origin_id payload_json; do
+import json
+import os
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+
+target_json = os.environ.get("TARGET_JSON", "")
+if not target_json:
+    raise SystemExit(0)
+
+target = json.loads(target_json)
+response_re = re.compile(r'Notified player\(s\) "([^"]+)" of travel response (SH_Arrakeen3|SH_HarkoVillage4): (\{.*\})')
+
+for line in sys.stdin:
+    match = response_re.search(line)
+    if not match:
+        continue
+    player_id = match.group(1)
+    origin_id = match.group(2)
+    try:
+        payload = json.loads(match.group(3))
+    except json.JSONDecodeError:
+        continue
+    if payload.get("Code") != 1:
+        continue
+    if payload.get("MapName") != "Survival_1":
+        continue
+    flow_id = payload.get("RequestID") or ""
+    if not flow_id:
+        continue
+    response_payload = dict(payload)
+    response_payload["MapName"] = "HaggaBasin"
+    grant_payload = {
+        "Map": "HaggaBasin",
+        "Dimension": target["dimension"],
+        "PartitionId": target["partition_id"],
+        "Port": target["port"],
+        "Expiration": (datetime.now(timezone.utc) + timedelta(minutes=3)).isoformat().replace("+00:00", "Z"),
+        "RequestToken": payload.get("QueueToken") or 0,
+        "OriginId": origin_id,
+        "RequestID": flow_id,
+        "Players": [{"Id": player_id, "TargetDimension": target["dimension"]}],
+        "Flow": 1,
+        "ServerLoginToken": payload.get("ServerLoginToken") or "",
+        "ReturnDimension": None,
+        "Ip": target["ip"],
+    }
+    print("{}|{}|{}".format(
+        flow_id,
+        origin_id,
+        json.dumps({
+            "response": response_payload,
+            "grant": grant_payload,
+        }, separators=(",", ":"), ensure_ascii=False),
+    ), flush=True)
+PY
+      [ -n "${flow_id:-}" ] || continue
+      hub_travel_seen "$flow_id" && continue
+
+      local response_json grant_json origin_server_id
+      origin_server_id="$(hub_server_id_for_origin_id "$origin_id" 2>/dev/null || true)"
+      [ -n "$origin_server_id" ] || continue
+
+      response_json="$(python3 - "$payload_json" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+print(json.dumps(payload["response"], separators=(",", ":"), ensure_ascii=False))
+PY
+)"
+      grant_json="$(python3 - "$payload_json" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+print(json.dumps(payload["grant"], separators=(",", ":"), ensure_ascii=False))
+PY
+)"
+
+      publish_rmq_json "heartbeats" "$origin_server_id" "$response_json" "travel-response-${flow_id}" || true
+      publish_rmq_json "heartbeats" "$origin_server_id" "$grant_json" "travel-grant-${flow_id}" || true
+      remember_hub_travel "$flow_id" "0" "$origin_id" "HaggaBasin" "$(date +%s)"
+      echo "FOLLOW-HAGGA flow=$flow_id origin=$origin_id server=$origin_server_id map=HaggaBasin"
+    done
+    sleep 1
+  done
+}
+
 companion_map_for() {
   case "$1" in
     SH_Arrakeen) echo "SH_HarkoVillage" ;;
     SH_HarkoVillage) echo "SH_Arrakeen" ;;
     *) return 1 ;;
+  esac
+}
+
+named_destination_target_map() {
+  case "$1" in
+    Travel_To_HaggaBasin_*|Travel_To_Hagga_Basin_*)
+      echo "Survival_1"
+      ;;
+    *)
+      return 1
+      ;;
   esac
 }
 
@@ -429,6 +808,17 @@ handle_idle_row() {
       ;;
   esac
 
+  if [ "$map" = "DeepDesert_1" ]; then
+    local desired_active assigned_for_map
+    desired_active="$(active_dimensions_for_map "$map")"
+    assigned_for_map="$(map_assigned_count "$map" | tr -d '[:space:]')"
+    [ -n "$assigned_for_map" ] || assigned_for_map=0
+    if [ "$assigned_for_map" -le "$desired_active" ] 2>/dev/null; then
+      clear_idle_since "$(state_key "$map" "$server_id")"
+      return 0
+    fi
+  fi
+
   local key
   key="$(state_key "$map" "$server_id")"
 
@@ -494,7 +884,7 @@ ensure_social_hub_companions() {
 }
 
 scan_social_hub_travel_handoffs() {
-  local source_map destination_map container
+  local source_map destination_map container log_file handoff_rows
 
   for source_map in SH_Arrakeen SH_HarkoVillage; do
     destination_map="$(companion_map_for "$source_map" 2>/dev/null || true)"
@@ -503,18 +893,24 @@ scan_social_hub_travel_handoffs() {
     [ -n "$container" ] || continue
     docker ps --format '{{.Names}}' | grep -qx "$container" || continue
 
-    docker logs --since "$SINCE" "$container" 2>&1 | python3 - "$source_map" "$destination_map" <<'PY' | while IFS='|' read -r flow_id funcom_id source_map destination_map; do
+    log_file="$(mktemp)"
+    docker logs --since "$SINCE" "$container" > "$log_file" 2>&1 || true
+    handoff_rows="$(SOURCE_MAP="$source_map" DESTINATION_MAP="$destination_map" LOG_FILE="$log_file" python3 - <<'PY'
+import os
 import re
-import sys
 
-source_map = sys.argv[1]
-destination_map = sys.argv[2]
+source_map = os.environ.get("SOURCE_MAP", "")
+destination_map = os.environ.get("DESTINATION_MAP", "")
+log_file = os.environ.get("LOG_FILE", "")
 warning_re = re.compile(r'Travel was initiated without specifying Destination\.Location or Destination\.Dimension.*FlowId:"?([A-F0-9]+)"?')
 request_re = re.compile(r'FlowType:"Travel", Stage:"(?:Request|Update)", PlayerId:"([^"]+)", FlowId:"([A-F0-9]+)"')
 
 flows = {}
 
-for line in sys.stdin:
+with open(log_file, encoding="utf-8", errors="replace") as f:
+  lines = list(f)
+
+for line in lines:
     req = request_re.search(line)
     if req:
         funcom_id = req.group(1)
@@ -530,8 +926,12 @@ for line in sys.stdin:
 
 for flow_id, payload in flows.items():
     if payload.get("warning") and payload.get("funcom_id"):
-        print(f"{flow_id}|{payload['funcom_id']}|{source_map}|{destination_map}")
+        print("{}|{}|{}|{}".format(flow_id, payload["funcom_id"], source_map, destination_map))
 PY
+    )"
+    rm -f "$log_file"
+
+    while IFS='|' read -r flow_id funcom_id source_map destination_map; do
       [ -n "${flow_id:-}" ] || continue
       hub_travel_seen "$flow_id" && continue
 
@@ -585,7 +985,136 @@ PY
 
       remember_hub_travel "$flow_id" "$account_id" "$source_map" "$destination_map" "$(date +%s)"
       echo "HUB-TRAVEL account=$account_id flow=$flow_id from=$source_map to=$destination_map server=$target_server_id"
-    done
+    done <<< "$handoff_rows"
+  done
+}
+
+scan_named_destination_failures() {
+  local source_map container log_file handoff_rows
+
+  for source_map in SH_Arrakeen SH_HarkoVillage; do
+    container="$(hub_container_for_map "$source_map" 2>/dev/null || true)"
+    [ -n "$container" ] || continue
+    docker ps --format '{{.Names}}' | grep -qx "$container" || continue
+
+    log_file="$(mktemp)"
+    docker logs --since "$NAMED_DESTINATION_SINCE" "$container" > "$log_file" 2>&1 || true
+    handoff_rows="$(SOURCE_MAP="$source_map" LOG_FILE="$log_file" python3 - <<'PY'
+import os
+import re
+
+source_map = os.environ.get("SOURCE_MAP", "")
+log_file = os.environ.get("LOG_FILE", "")
+request_re = re.compile(r'FlowType:"Travel", Stage:"(?:Request|Update|Grant)", PlayerId:"([^"]+)", FlowId:"([A-F0-9]+)"')
+failure_re = re.compile(r'UpdateTravelDestination\((Travel_To_[A-Za-z0-9_]+)\) unable to find destination')
+
+flows = {}
+
+with open(log_file, encoding="utf-8", errors="replace") as f:
+  lines = list(f)
+
+for line in lines:
+    req = request_re.search(line)
+    if req:
+        funcom_id = req.group(1)
+        flow_id = req.group(2)
+        flows.setdefault(flow_id, {"funcom_id": funcom_id, "destination": ""})
+        flows[flow_id]["funcom_id"] = funcom_id
+    fail = failure_re.search(line)
+    if fail:
+        destination = fail.group(1)
+        flow_ids = [value for value in re.findall(r'\[([A-F0-9]+)\]', line) if len(value) == 32]
+        if flow_ids:
+            flow_id = flow_ids[-1]
+            flows.setdefault(flow_id, {"funcom_id": "", "destination": destination})
+            flows[flow_id]["destination"] = destination
+
+for flow_id, payload in flows.items():
+    if payload.get("funcom_id") and payload.get("destination"):
+        print("{}|{}|{}|{}".format(flow_id, payload["funcom_id"], source_map, payload["destination"]))
+PY
+    )"
+    rm -f "$log_file"
+
+    while IFS='|' read -r flow_id funcom_id source_map destination_name; do
+      [ -n "${flow_id:-}" ] || continue
+      hub_travel_seen "$flow_id" && continue
+
+      local target_map account_id destination_row target_partition_id target_dimension target_server_id current_map
+      target_map="$(named_destination_target_map "$destination_name" 2>/dev/null || true)"
+      [ -n "$target_map" ] || continue
+
+      account_id="$(psql_value "select id from dune.accounts where \"user\" = '${funcom_id//\'/\'\'}' limit 1;")"
+      [ -n "$account_id" ] || continue
+
+      current_map="$(psql_value "
+        select coalesce(fs.map, '')
+        from dune.player_state ps
+        left join dune.farm_state fs on fs.server_id = ps.server_id
+        where ps.account_id = $account_id
+        limit 1;
+      ")"
+
+      destination_row="$(psql_value "
+        select
+          wp.partition_id || '|' ||
+          coalesce(wp.dimension_index::text, '0') || '|' ||
+          coalesce(wp.server_id, '')
+        from dune.world_partition wp
+        join dune.farm_state fs on fs.server_id = wp.server_id
+        where wp.map = '$target_map'
+          and fs.ready = true
+          and fs.alive = true
+        order by wp.partition_id
+        limit 1;
+      ")"
+      [ -n "$destination_row" ] || continue
+      IFS='|' read -r target_partition_id target_dimension target_server_id <<< "$destination_row"
+      [ -n "$target_server_id" ] || continue
+
+      psql_value "
+        update dune.player_state
+        set
+          pending_respawn_location_id = null
+        where account_id = $account_id;
+
+        update dune.player_state
+        set
+          server_id = '$target_server_id',
+          previous_server_partition_id = $target_partition_id,
+          return_dimension_index = $target_dimension
+        where account_id = $account_id;
+
+        update dune.encrypted_player_state
+        set
+          pending_respawn_location_id = null
+        where account_id = $account_id;
+
+        update dune.encrypted_player_state
+        set
+          server_id = '$target_server_id',
+          previous_server_partition_id = $target_partition_id,
+          return_dimension_index = $target_dimension
+        where account_id = $account_id;
+
+        delete from dune.travel_return_info
+        where player_controller_id in (
+          select id
+          from dune.actors
+          where owner_account_id = $account_id
+            and class = '/Game/Dune/Characters/Player/BP_DunePlayerController.BP_DunePlayerController_C'
+        );
+
+        delete from dune.player_respawn_locations
+        where account_id = $account_id
+          and map = 'HaggaBasin';
+      " >/dev/null
+
+      replay_hagga_travel_handoff "$flow_id" "$source_map" "$destination_name"
+
+      remember_hub_travel "$flow_id" "$account_id" "$source_map" "$target_map" "$(date +%s)"
+      echo "NAMED-TRAVEL account=$account_id flow=$flow_id destination=$destination_name from=$source_map to=$target_map current_map=$current_map server=$target_server_id cleaned_respawns=HaggaBasin"
+    done <<< "$handoff_rows"
   done
 }
 
@@ -758,25 +1287,35 @@ scan_live_player_partition_alignment() {
 }
 
 scan_travel_demand() {
-  docker logs --since "$SINCE" dune-director 2>&1 \
-    | python3 -c '
+  local demand_rows
+
+  demand_rows="$(
+    docker logs --since "$SINCE" dune-director 2>&1 | python3 -c '
 import re
 import sys
 
-pattern = re.compile(
+classical_pattern = re.compile(
     r"Processing travel queue for ClassicalInstancing group ([A-Za-z0-9_]+) "
     r"\(servers: \[[^\]]*\], num: ([0-9]+)\)"
+)
+dimension_request_pattern = re.compile(
+    r"Received travel request for ([0-9]+) player\(s\) to ([A-Za-z0-9_]+) "
+    r"\(instancingMode=Dimension\)"
 )
 
 seen = set()
 
 for line in sys.stdin:
-    match = pattern.search(line)
-    if not match:
-        continue
-
-    map_name = match.group(1)
-    num = int(match.group(2))
+    match = classical_pattern.search(line)
+    if match:
+        map_name = match.group(1)
+        num = int(match.group(2))
+    else:
+        match = dimension_request_pattern.search(line)
+        if not match:
+            continue
+        num = int(match.group(1))
+        map_name = match.group(2)
 
     if num <= 0:
         continue
@@ -787,16 +1326,23 @@ for line in sys.stdin:
 
     seen.add(key)
     print(f"{map_name}|{num}")
-' \
-    | while IFS='|' read -r map num; do
-        handle_demand "$map" "$num"
-      done
+'
+  )"
+
+  while IFS='|' read -r map num; do
+    [ -n "${map:-}" ] || continue
+    handle_demand "$map" "$num"
+  done <<< "$demand_rows"
 }
+
+follow_director_hagga_handoffs &
 
 while true; do
   scan_travel_demand
   ensure_social_hub_companions
+  scan_proactive_hagga_handoffs
   scan_social_hub_travel_handoffs
+  scan_named_destination_failures
   scan_idle_servers
   scan_reconnect_demand
   scan_live_player_partition_alignment
