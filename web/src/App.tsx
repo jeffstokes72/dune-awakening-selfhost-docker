@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { Activity, Archive, Database, FileText, Home, Map, PackagePlus, Play, RefreshCw, Server, Settings, Shield, Users } from "lucide-react";
+import { Activity, Archive, Database, FileText, Gift, Home, Map, PackagePlus, Play, RefreshCw, Server, Settings, Shield, ShoppingCart, Users } from "lucide-react";
 import { api, post, setCsrfToken } from "./api/client";
 import { serverApi } from "./api/server";
 import { playersApi } from "./api/players";
@@ -11,6 +11,8 @@ import { mapsApi } from "./api/maps";
 import { updatesApi } from "./api/updates";
 import { worldDataApi } from "./api/worldData";
 import { adminApi } from "./api/admin";
+import { marketApi } from "./api/market";
+import { starterKitApi, type StarterKitConfig } from "./api/starterKit";
 import { setupApi, type Task } from "./api/setup";
 import { liveMapApi, type LiveMapMarker } from "./api/liveMap";
 import { SetupWizard } from "./components/SetupWizard";
@@ -21,7 +23,7 @@ import { PortChecklist } from "./components/PortChecklist";
 import { ReadinessTimeline } from "./components/ReadinessTimeline";
 import { ServiceHealthCard } from "./components/ServiceHealthCard";
 
-type Tab = "Home" | "Setup" | "Server Control" | "Services" | "Players" | "Admin Tools" | "Live Map" | "Maps" | "Database" | "Storage" | "Bases" | "Blueprints" | "Backups" | "Logs" | "Updates" | "Settings";
+type Tab = "Home" | "Setup" | "Server Control" | "Services" | "Players" | "Admin Tools" | "Live Map" | "Maps" | "Market" | "Starter Kit" | "Database" | "Storage" | "Bases" | "Blueprints" | "Backups" | "Logs" | "Updates" | "Settings";
 
 const nav: { tab: Tab; icon: React.ReactNode }[] = [
   { tab: "Home", icon: <Home size={18} /> },
@@ -32,6 +34,8 @@ const nav: { tab: Tab; icon: React.ReactNode }[] = [
   { tab: "Admin Tools", icon: <PackagePlus size={18} /> },
   { tab: "Live Map", icon: <Map size={18} /> },
   { tab: "Maps", icon: <Map size={18} /> },
+  { tab: "Market", icon: <ShoppingCart size={18} /> },
+  { tab: "Starter Kit", icon: <Gift size={18} /> },
   { tab: "Database", icon: <Database size={18} /> },
   { tab: "Storage", icon: <Archive size={18} /> },
   { tab: "Bases", icon: <Server size={18} /> },
@@ -114,10 +118,12 @@ export function App() {
         {tab === "Admin Tools" && <AdminToolsPanel setTask={setTask} onError={setError} />}
         {tab === "Live Map" && <LiveMapPanel onError={setError} />}
         {tab === "Maps" && <MapsPanel setTask={setTask} onError={setError} />}
+        {tab === "Market" && <MarketPanel onError={setError} />}
+        {tab === "Starter Kit" && <StarterKitPanel onError={setError} />}
         {tab === "Database" && <DatabasePanel setTask={setTask} />}
         {tab === "Storage" && <StoragePanel onError={setError} />}
-        {tab === "Bases" && <WorldListPanel title="Bases" load={worldDataApi.bases} exportUrl={(id) => worldDataApi.baseExportUrl(id)} onError={setError} />}
-        {tab === "Blueprints" && <WorldListPanel title="Blueprints" load={worldDataApi.blueprints} exportUrl={(id) => worldDataApi.blueprintExportUrl(id)} onError={setError} />}
+        {tab === "Bases" && <WorldListPanel title="Bases" load={worldDataApi.bases} exportUrl={(id) => worldDataApi.baseExportUrl(id)} exportLabel="Export Blueprint JSON" blockedText="Base import and delete remain blocked until ownership, position, entity ID remapping, and full object graph deletion rules are verified." onError={setError} />}
+        {tab === "Blueprints" && <WorldListPanel title="Blueprints" load={worldDataApi.blueprints} exportUrl={(id) => worldDataApi.blueprintExportUrl(id)} exportLabel="Export Full JSON" blockedText="Blueprint import, clone, and delete remain blocked until offline-player inventory ownership, blueprint item stat wiring, and ID remapping rules are verified." onError={setError} />}
         {tab === "Backups" && <BackupsPanel setTask={setTask} onError={setError} />}
         {tab === "Logs" && <LogsPanel selectedService={selectedLogService} setSelectedService={setSelectedLogService} text={logs} setText={setLogs} onError={setError} />}
         {tab === "Updates" && <UpdatesPanel setTask={setTask} />}
@@ -508,6 +514,121 @@ function DatabasePanel({ setTask }: { setTask: (task: Task) => void }) {
   </section>;
 }
 
+function MarketPanel({ onError }: { onError: (text: string) => void }) {
+  const [q, setQ] = useState("");
+  const [view, setView] = useState("items");
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [stats, setStats] = useState<Record<string, unknown> | null>(null);
+  const [capabilities, setCapabilities] = useState<Record<string, unknown> | null>(null);
+  const [message, setMessage] = useState("");
+  async function run(action: () => Promise<void>) {
+    onError("");
+    setMessage("");
+    try { await action(); } catch (error) { const text = error instanceof Error ? error.message : String(error); setMessage(text); onError(text); }
+  }
+  async function load(nextView = view) {
+    setView(nextView);
+    setStats(null);
+    if (nextView === "items") {
+      const result = await marketApi.items(q);
+      setRows(result.rows || []);
+      setCapabilities(result.capabilities || null);
+    } else if (nextView === "listings") {
+      const result = await marketApi.listings(q);
+      setRows(result.rows || []);
+    } else if (nextView === "sales") {
+      const result = await marketApi.sales();
+      setRows(result.rows || []);
+    } else if (nextView === "catalog") {
+      const result = await marketApi.catalog(q);
+      setRows(result.rows || []);
+    } else if (nextView === "categories") {
+      const result = await marketApi.categories();
+      setRows(result.categories.map((category) => ({ category })));
+    } else if (nextView === "stats") {
+      const result = await marketApi.stats();
+      setRows([]);
+      setStats(result.stats || {});
+    }
+  }
+  return <section className="panel">
+    <div className="panel-title"><h2>Market</h2><button onClick={() => run(async () => setCapabilities(await marketApi.capabilities()))}>Load Capabilities</button></div>
+    <div className="action-row">
+      <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Template id, item name, or category" />
+      <button onClick={() => run(() => load("items"))}>Items</button>
+      <button onClick={() => run(() => load("listings"))}>Listings</button>
+      <button onClick={() => run(() => load("sales"))}>Sales</button>
+      <button onClick={() => run(() => load("stats"))}>Stats</button>
+      <button onClick={() => run(() => load("categories"))}>Categories</button>
+      <button onClick={() => run(() => load("catalog"))}>Catalog</button>
+    </div>
+    <div className="action-row">
+      <button onClick={() => run(async () => setCapabilities(await marketApi.automationStatus()))}>Automation Status</button>
+      <button disabled onClick={() => undefined}>Start Automation</button>
+      <button disabled onClick={() => undefined}>Stop Automation</button>
+      <button disabled onClick={() => undefined}>Run Once</button>
+      <button disabled onClick={() => undefined}>Cleanup</button>
+    </div>
+    {message && <p className="danger-note">{message}</p>}
+    {capabilities && <pre className="mini-output">{JSON.stringify(capabilities, null, 2)}</pre>}
+    {stats && <pre className="mini-output">{JSON.stringify(stats, null, 2)}</pre>}
+    <DataTable rows={rows} />
+  </section>;
+}
+
+function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
+  const [config, setConfig] = useState<StarterKitConfig>({ enabled: false, version: "starter-kit-v1", items: [], xp: 0, allowRepeatGrants: false });
+  const [itemsText, setItemsText] = useState("");
+  const [playerId, setPlayerId] = useState("");
+  const [grantId, setGrantId] = useState("");
+  const [history, setHistory] = useState<Record<string, unknown>[]>([]);
+  const [output, setOutput] = useState("");
+  async function run(action: () => Promise<void>) {
+    onError("");
+    setOutput("");
+    try { await action(); } catch (error) { const text = error instanceof Error ? error.message : String(error); setOutput(text); onError(text); }
+  }
+  async function load() {
+    const next = await starterKitApi.config();
+    setConfig(next);
+    setItemsText(next.items.map((item) => `${item.itemId || item.itemName || ""},${item.quantity},${item.durability}`).join("\n"));
+    setHistory((await starterKitApi.history()).rows || []);
+  }
+  function nextConfig(): StarterKitConfig {
+    return {
+      ...config,
+      items: itemsText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+        const [nameOrId, qty = "1", durability = "1"] = line.split(",").map((part) => part.trim());
+        const item = /^[A-Za-z0-9_./:-]{16,}$/.test(nameOrId) ? { itemId: nameOrId } : { itemName: nameOrId };
+        return { ...item, quantity: Number(qty), durability: Number(durability) };
+      })
+    };
+  }
+  return <section className="panel">
+    <div className="panel-title"><h2>Starter Kit</h2><button onClick={() => run(load)}>Load Starter Kit</button></div>
+    <p className="danger-note">Automatic new-player scanning is disabled in this web implementation. Manual grants use existing RedBlink admin CLI commands and require confirmation.</p>
+    <div className="two-col">
+      <label>Version<input value={config.version} onChange={(event) => setConfig({ ...config, version: event.target.value })} /></label>
+      <label>XP<input value={String(config.xp)} onChange={(event) => setConfig({ ...config, xp: Number(event.target.value) })} /></label>
+      <label><input type="checkbox" checked={config.allowRepeatGrants} onChange={(event) => setConfig({ ...config, allowRepeatGrants: event.target.checked })} /> Allow repeat manual grants</label>
+      <button onClick={() => run(async () => { if (window.confirm("Save Starter Kit config?")) setConfig(await starterKitApi.saveConfig(nextConfig(), "SAVE STARTER KIT")); })}>Save Config</button>
+      <button onClick={() => run(async () => { if (window.confirm("Enable Starter Kit config? Manual grants remain confirmation-gated.")) setConfig(await starterKitApi.enable("ENABLE STARTER KIT")); })}>Enable</button>
+      <button className="danger" onClick={() => run(async () => { if (window.confirm("Disable Starter Kit?")) setConfig(await starterKitApi.disable("DISABLE STARTER KIT")); })}>Disable</button>
+    </div>
+    <label>Items<textarea value={itemsText} onChange={(event) => setItemsText(event.target.value)} placeholder="One per line: item name or raw id, quantity, durability" /></label>
+    <div className="action-row">
+      <input value={playerId} onChange={(event) => setPlayerId(event.target.value)} placeholder="Player FLS ID or actor id" />
+      <button onClick={() => run(async () => { if (window.confirm(`Grant Starter Kit to ${playerId}?`)) setOutput(JSON.stringify(await starterKitApi.grant(playerId, "GRANT STARTER KIT"), null, 2)); })}>Grant Starter Kit</button>
+      <input value={grantId} onChange={(event) => setGrantId(event.target.value)} placeholder="Failed grant id" />
+      <button onClick={() => run(async () => { if (window.confirm(`Retry Starter Kit grant ${grantId}?`)) setOutput(JSON.stringify(await starterKitApi.retry(grantId, "RETRY STARTER KIT"), null, 2)); })}>Retry Failed Grant</button>
+      <button onClick={() => run(async () => setHistory((await starterKitApi.history()).rows || []))}>Load History</button>
+    </div>
+    {output && <pre className="mini-output">{output}</pre>}
+    <pre className="mini-output">{JSON.stringify(config, null, 2)}</pre>
+    <DataTable rows={history} />
+  </section>;
+}
+
 function StoragePanel({ onError }: { onError: (text: string) => void }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null);
@@ -545,7 +666,7 @@ function StoragePanel({ onError }: { onError: (text: string) => void }) {
   return <section className="panel"><div className="panel-title"><h2>Storage</h2><button onClick={load}>Load Storage</button></div><p className="danger-note">{storageResult}</p><DataTable rows={rows} onRowClick={open} />{selected && <section className="drawer"><h3>Storage {String(selected.id)}</h3><div className="action-row"><a className="button-link" href={worldDataApi.storageExportUrl(String(selected.id))}>Export JSON</a><input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="Item name" /><button disabled={!canGiveItem} onClick={giveStorageItem}>Give Item to Storage</button></div><DataTable rows={items} /></section>}</section>;
 }
 
-function WorldListPanel({ title, load, exportUrl, onError }: { title: string; load: () => Promise<{ rows: Record<string, unknown>[]; reason?: string }>; exportUrl: (id: string) => string; onError: (text: string) => void }) {
+function WorldListPanel({ title, load, exportUrl, exportLabel = "Export", blockedText = "", onError }: { title: string; load: () => Promise<{ rows: Record<string, unknown>[]; reason?: string }>; exportUrl: (id: string) => string; exportLabel?: string; blockedText?: string; onError: (text: string) => void }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [reason, setReason] = useState("");
   async function refresh() {
@@ -558,7 +679,7 @@ function WorldListPanel({ title, load, exportUrl, onError }: { title: string; lo
       onError(error instanceof Error ? error.message : String(error));
     }
   }
-  return <section className="panel"><div className="panel-title"><h2>{title}</h2><button onClick={refresh}>Load {title}</button></div>{reason && <p className="danger-note">{reason}</p>}<DataTable rows={rows} action={(row) => <a className="button-link" href={exportUrl(String(row.id))}>Export</a>} /></section>;
+  return <section className="panel"><div className="panel-title"><h2>{title}</h2><button onClick={refresh}>Load {title}</button></div>{reason && <p className="danger-note">{reason}</p>}{blockedText && <p className="danger-note">{blockedText}</p>}<DataTable rows={rows} action={(row) => <a className="button-link" href={exportUrl(String(row.id))}>{exportLabel}</a>} /></section>;
 }
 
 function BackupsPanel({ setTask, onError }: { setTask: (task: Task) => void; onError: (text: string) => void }) {

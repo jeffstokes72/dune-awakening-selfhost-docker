@@ -87,7 +87,7 @@ Base path for the native RedBlink API: `/api`.
 | `/api/admin/history` | GET | Admin history | `dune admin history` |
 | `/api/admin/broadcast` | POST | Live admin broadcast | Publishes RedBlink `ServiceBroadcast` Generic envelope to `dune-rmq-game` `heartbeats/notifications` |
 | `/api/admin/broadcast-shutdown` | POST | Shutdown broadcast | Publishes RedBlink `ServiceBroadcast` ServerShutdown envelope to `dune-rmq-game` `heartbeats/notifications`; requires `SHUTDOWN BROADCAST` |
-| `/api/admin/whisper` | POST | Whisper capability response | Returns unsupported until GM courier identity and `chat.whispers` route are verified |
+| `/api/admin/whisper` | POST | Whisper capability response | Returns unsupported until RedBlink exposes the GM courier account/persona, sender Funcom ID, sender hex FLS ID, recipient Funcom ID mapping, and verified `chat.whispers` routing |
 | `/api/map/status` | GET | Live map status bundle | `dune maps list`, `dune servers`, `dune ready`, `dune autoscaler status` |
 | `/api/map/capabilities` | GET | Live map overlay capabilities | Direct PostgreSQL table/function capability detection |
 | `/api/map/markers` | GET | Combined Live Map markers | Direct PostgreSQL player/vehicle/base/storage/service marker queries where schema support exists |
@@ -116,15 +116,46 @@ Base path for the native RedBlink API: `/api`.
 | `/api/storage/:id/give-item` | POST | Give item to storage | Creates `dune db backup`, validates item catalog/template and slot count, transactionally inserts into `dune.items`; requires `GIVE ITEM TO STORAGE` |
 | `/api/storage/:id/export` | GET | Export storage JSON | Direct PostgreSQL inventory query |
 | `/api/bases/:id` | GET | Base detail | Direct PostgreSQL base list lookup |
-| `/api/bases/:id/export` | GET | Export base summary JSON | Direct PostgreSQL base query summary |
+| `/api/bases/:id/export` | GET | Export base-as-blueprint JSON | Direct PostgreSQL read-only export from `dune.building_instances`, `dune.placeables`, and `dune.actors` |
+| `/api/bases/:id/export-blueprint` | POST | Return base-as-blueprint JSON | Same read-only direct PostgreSQL export as `/export` |
+| `/api/bases/import` | POST | Base import capability response | Requires `IMPORT BASE`; returns unsupported until safe ownership/position/entity remapping is verified |
+| `/api/bases/:id` | DELETE | Base delete capability response | Requires `DELETE BASE`; returns unsupported until safe full graph deletion rules are verified |
 | `/api/blueprints/:id` | GET | Blueprint detail | Direct PostgreSQL blueprint list lookup |
-| `/api/blueprints/:id/export` | GET | Export blueprint summary JSON | Direct PostgreSQL blueprint query summary |
+| `/api/blueprints/:id/export` | GET | Export full blueprint JSON | Direct PostgreSQL read-only export from `dune.building_blueprints`, `building_blueprint_instances`, `building_blueprint_placeables`, optional `building_blueprint_pentashields`, and `items` blueprint stats |
+| `/api/blueprints/import` | POST | Blueprint import capability response | Requires `IMPORT BLUEPRINT`; validates payload shape, then returns unsupported until safe offline-player inventory/stat wiring/ID remapping is verified |
+| `/api/blueprints/:id/clone` | POST | Blueprint clone capability response | Requires `CLONE BLUEPRINT`; returns unsupported until safe clone item creation and stat wiring are verified |
+| `/api/blueprints/:id` | DELETE | Blueprint delete capability response | Requires `DELETE BLUEPRINT`; returns unsupported until safe item/blueprint graph deletion rules are verified |
+| `/api/market/items` | GET | Aggregated active market items | Direct PostgreSQL query over `dune_exchange_orders`, `dune_exchange_sell_orders`, and `items`; supports `q`, `limit`, `offset` |
+| `/api/market/search` | GET | Market item search | Same market item query filtered by `q` |
+| `/api/market/listings` | GET | Active market listings | Direct PostgreSQL query over `dune_exchange_orders`, `dune_exchange_sell_orders`, `items`, `actors`, and `player_state`; supports `template_id` and `owner` |
+| `/api/market/sales` | GET | Recent fulfilled sales | Direct PostgreSQL query over `dune_exchange_fulfilled_orders` and related order/player tables |
+| `/api/market/stats` | GET | Aggregate market stats | Direct PostgreSQL market aggregate query |
+| `/api/market/categories` | GET | Item categories | RedBlink item catalog categories from `runtime/data/admin-items.json` |
+| `/api/market/catalog` | GET | Item catalog | RedBlink item catalog rows from `runtime/data/admin-items.json` |
+| `/api/market/automation/status` | GET | Market automation capability response | Returns unsupported; no RedBlink-compatible market-bot runtime is present |
+| `/api/market/automation/start` | POST | Market automation unsupported response | Returns unsupported and audit logs the attempt |
+| `/api/market/automation/stop` | POST | Market automation unsupported response | Returns unsupported and audit logs the attempt |
+| `/api/market/automation/run-once` | POST | Market automation unsupported response | Returns unsupported and audit logs the attempt |
+| `/api/market/automation/cleanup` | POST | Market automation unsupported response | Returns unsupported and audit logs the attempt |
+| `/api/market/automation/history` | GET | Market automation history capability response | Returns unsupported with empty rows |
+| `/api/starter-kit/capabilities` | GET | Starter Kit capability response | Reports manual grant support and automatic scanner blocker |
+| `/api/starter-kit/config` | GET | Starter Kit config | File-backed config from `runtime/generated/starter-kit.json`, default disabled |
+| `/api/starter-kit/config` | POST | Save Starter Kit config | Validates items/XP/version and requires `SAVE STARTER KIT` |
+| `/api/starter-kit/grants` | GET | Starter Kit grants | File-backed grant history from `runtime/generated/starter-kit-grants.jsonl` |
+| `/api/starter-kit/history` | GET | Starter Kit history | Same file-backed grant history |
+| `/api/starter-kit/grant/:playerId` | POST | Manual Starter Kit grant | Requires `GRANT STARTER KIT`; executes `dune admin grant-item`, `grant-item-id`, and `award-xp` according to config |
+| `/api/starter-kit/retry/:grantId` | POST | Retry failed Starter Kit grant | Requires `RETRY STARTER KIT`; reruns the manual grant for failed history rows |
+| `/api/starter-kit/enable` | POST | Enable Starter Kit config | Requires `ENABLE STARTER KIT`; enables config only, does not start an automatic scanner |
+| `/api/starter-kit/disable` | POST | Disable Starter Kit config | Requires `DISABLE STARTER KIT` |
+| `/api/starter-kit/run` | POST | Starter Kit scanner capability response | Returns unsupported; automatic welcome scanner runtime is not ported |
 
 ## Not Done Yet
 
 
 - `/api/players/:id/set-currency`
 - `/api/admin/whisper` returns explicit unsupported capability response until RedBlink exposes or seeds a verified GM courier identity for `chat.whispers`
+- Market automation endpoints return explicit unsupported responses until a RedBlink-compatible market-bot service/CLI exists
+- Blueprint/base import, clone, and delete endpoints return explicit unsupported responses after backend confirmation and payload validation because safe graph mutation/remapping rules are not verified
 - player progression/events/stats/history deep schema mapping
 - `/api/setup/install-docker`
 

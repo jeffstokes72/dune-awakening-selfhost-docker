@@ -8,7 +8,7 @@ This file is the working status ledger for the RedBlink web admin interface. A f
 |---|---|---|
 | Phase 1 foundation | Partial | Auth/session/CSRF/task/audit/safe-runner basics exist; several placeholder routes were removed or replaced with real validated operations; broader parity coverage and tests are still incomplete. |
 | Phase 2 server operations | Done | Server status/readiness/ports/services/doctor, lifecycle tasks, service restart, logs, backup list/create/restore/delete, and update tasks are wired to real RedBlink commands with frontend controls and task streaming. |
-| Phase 3 direct DB features | Partial | Direct Postgres access, database browser, player list/profile/inventory/currency/factions/specs/position capability, storage, bases, and blueprints are wired. Progression/events/stats/history and full blueprint/base export/import remain schema-dependent. |
+| Phase 3 direct DB features | Partial | Direct Postgres access, database browser, player list/profile/inventory/currency/factions/specs/position capability, storage, bases, blueprints, and Phase 5B2 market reads are wired. Progression/events/stats/history and destructive blueprint/base import/delete remain schema-dependent. |
 
 ## Feature Group Status
 
@@ -21,8 +21,7 @@ This file is the working status ledger for the RedBlink web admin interface. A f
 | Logs | Partial | Phase 2 service logs are wired through `/api/logs/services`, `/api/logs/:service`, `/stream`, and `/download`; known services use `dune logs`, safely discovered dynamic `dune-server-*` containers use validated Docker logs. Cheat/admin logs remain for later parity work. | Runner log validation tests pass; frontend build passes. |
 | Live map | Partial | Phase 5B1 adds a real Live Map page backed by direct DB marker queries for players, vehicles, bases, storage, and service partitions where schema support exists. Coordinates are raw `dune.actors.transform` world positions; exact image/world calibration remains unverified, so the UI shows a relative coordinate plot plus marker tables and unsupported overlay reasons. | DB marker query tests and frontend build pass. |
 | Storage | Partial | Direct DB storage list, item view, JSON export, and give-item mutation are wired. Give-item creates a backup first, validates catalog item and quantity, verifies a compatible `dune.inventories`/`dune.items` schema, checks slot capacity when `max_item_count` is present, and inserts with parameterized SQL. Full volume-stack rules still need deeper schema confirmation. | DB mutation tests and frontend build pass. |
-| Market | Not Implemented | No market DB query layer or UI yet. | Needs tests. |
-| Starter Kit | Not Implemented | No welcome package/starter kit backend or UI yet. | Needs tests. |
+| Bases | Partial | Direct DB base list/detail and read-only base-as-blueprint export are wired from `building_instances`, `placeables`, and `actors`. Import/delete remain blocked because ownership, position, entity ID remapping, collision, and full graph deletion rules are not verified. | DB export/payload validation tests and frontend build pass. |
 | Updates | Partial | Phase 2 game/stack check/apply task wrappers are done; release listing, auto-update controls, and repair remain for later phases. | Runner update mapping tests pass; frontend build passes. |
 | Setup wizard | Partial | Existing setup wizard scaffold exists; must be cleaned up and kept separate from parity features. | Needs tests. |
 | Security / audit / tasks | Partial | Auth, CSRF, task, audit, redaction exist; direct DB writes require backend confirmation and create `dune db backup` before mutation; async player task refresh now waits for success before refreshing profile/inventory. Broader endpoint tests still need expansion. | Auth/CSRF, runner, DB mutation, RMQ, and task tests pass. |
@@ -46,9 +45,20 @@ This file is the working status ledger for the RedBlink web admin interface. A f
 | Deep Desert | Partial | Status, enable, disable, repair, and bootstrap are wired through `dune deepdesert dual ...` with `UPDATE DEEP DESERT`. Detailed per-field Deep Desert settings remain CLI/config driven. |
 | Map memory | Done | `GET /api/maps/memory`; `POST /api/maps/memory` wraps `dune memory set|unset` and requires `SET MAP MEMORY` or `UNSET MAP MEMORY`. |
 
+## Phase 5B2 Market / Starter Kit / Blueprint / Base Status
+
+| Feature | Status | Implementation path |
+|---|---|---|
+| Market catalog/categories/search | Done | `GET /api/market/catalog`, `/categories`, and `/search` use RedBlink `runtime/data/admin-items.json` plus the market item query. |
+| Starter Kit config/manual grant/history | Partial | Config, enable/disable, grants/history, retry, and manual player grant endpoints exist. Manual grants call `dune admin grant-item`, `dune admin grant-item-id`, and `dune admin award-xp`. |
+| Blueprint import/clone/delete | Blocked | Requires verified offline-player backpack ownership, item creation/stat wiring, and blueprint ID remapping; no safe RedBlink CLI exists yet. |
+| Base export-to-blueprint | Partial | `GET /api/bases/:id/export` and `POST /api/bases/:id/export-blueprint` export a read-only blueprint-shaped object graph from building instances and placeables. Coordinate normalization matches the detected DB shape but import placement/remapping is still blocked. |
+| Base import/delete | Blocked | Requires verified building/placeable/inventory object graph remapping/deletion, ownership assignment, and live-service collision rules. |
+| Whisper | Blocked | See Notifications row: GM courier identity and `chat.whispers` recipient routing are not exposed by RedBlink. |
+
 ## Blocked Items
 
-No feature group is currently marked Blocked. Features without a known reliable RedBlink implementation path are Not Implemented until a direct schema/RMQ/runtime audit proves whether they can work.
+Blocked features now have explicit technical blockers: Whisper, market automation, Starter Kit automatic scanning, blueprint import/clone/delete, and base import/delete. They must not be promoted to Done until RedBlink exposes a safe CLI/runtime path or the exact DB/RMQ identity and graph mutation rules are verified.
 
 ## Phase 4 Action Status
 

@@ -26,6 +26,21 @@ export function resolveCatalogItem(repoRoot, { itemName = "", itemId = "" } = {}
   throw new Error(`No item found for: ${value}`);
 }
 
+export function listCatalogItems(repoRoot, { q = "", limit = 500 } = {}) {
+  const items = JSON.parse(readFileSync(resolve(repoRoot, "runtime/data/admin-items.json"), "utf8"));
+  const term = String(q || "").trim().toLowerCase();
+  const max = Math.max(1, Math.min(Number(limit) || 500, 2000));
+  return items
+    .filter((item) => {
+      if (!term) return true;
+      return String(item.id || "").toLowerCase().includes(term) ||
+        String(item.name || "").toLowerCase().includes(term) ||
+        String(item.category || "").toLowerCase().includes(term);
+    })
+    .slice(0, max)
+    .map(normalizeItem);
+}
+
 function normalizeItem(item) {
   const id = String(item.id || "").trim();
   if (!/^[A-Za-z0-9_./:-]{1,240}$/.test(id)) throw new Error("Invalid resolved item id");

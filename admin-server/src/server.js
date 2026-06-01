@@ -10,8 +10,9 @@ import { createDb } from "./db.js";
 import * as duneDb from "./duneDb.js";
 import { audit } from "./audit.js";
 import { redact } from "./redact.js";
-import { resolveCatalogItem } from "./adminCatalog.js";
+import { listCatalogItems, resolveCatalogItem } from "./adminCatalog.js";
 import { buildBroadcastCommand, buildShutdownBroadcastCommand, publishServerCommand } from "./rmq.js";
+import { enableStarterKit, grantStarterKit, retryStarterKitGrant, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitHistory } from "./starterKit.js";
 
 const config = loadConfig();
 const auth = createAuth(config);
@@ -133,7 +134,7 @@ async function handleApi(req, res) {
   if (path === "/api/admin/history") return commandJson(res, "adminHistory");
   if (path === "/api/admin/broadcast" && req.method === "POST") return broadcastRoute(req, res);
   if (path === "/api/admin/broadcast-shutdown" && req.method === "POST") return shutdownBroadcastRoute(req, res);
-  if (path === "/api/admin/whisper" && req.method === "POST") return unsupportedMutation(req, res, "admin.whisper", "Whisper remains blocked: arrakis-admin publishes to chat.whispers with a GM courier persona and recipient Funcom ID, but RedBlink does not currently seed or verify that GM chat identity in the self-host stack.");
+  if (path === "/api/admin/whisper" && req.method === "POST") return unsupportedMutation(req, res, "admin.whisper", "Whisper remains blocked: arrakis-admin publishes courier chat to exchange chat.whispers with routing key equal to the recipient Funcom ID, AMQP type text_chat, and sender user_id set to a seeded GM hex FLS ID. RedBlink does not currently seed or expose the required GM account/persona rows, sender Funcom ID, sender hex FLS ID, and verified recipient Funcom ID mapping.");
   if (path.match(/^\/api\/players\/[^/]+\/give-item$/) && req.method === "POST") return playerTask(req, res, path, "adminGiveItem");
   if (path.match(/^\/api\/players\/[^/]+\/give-items$/) && req.method === "POST") return giveItemsRoute(req, res, path);
   if (path.match(/^\/api\/players\/[^/]+\/give-item-id$/) && req.method === "POST") return playerTask(req, res, path, "adminGiveItemId");
@@ -169,11 +170,39 @@ async function handleApi(req, res) {
   if (path.match(/^\/api\/storage\/[^/]+\/give-item$/) && req.method === "POST") return storageGiveItemRoute(req, res, path);
   if (path.match(/^\/api\/storage\/[^/]+\/export$/)) return exportJson(res, `storage-${decodeURIComponent(path.split("/")[3])}.json`, () => duneDb.storageItems(db, decodeURIComponent(path.split("/")[3])));
   if (path === "/api/bases") return dbJson(res, () => duneDb.listBases(db));
-  if (path.match(/^\/api\/bases\/[^/]+$/)) return dbJson(res, async () => ({ base: (await duneDb.listBases(db)).rows.find((row) => String(row.id) === decodeURIComponent(path.split("/")[3])) || null }));
-  if (path.match(/^\/api\/bases\/[^/]+\/export$/)) return exportJson(res, `base-${decodeURIComponent(path.split("/")[3])}.json`, async () => ({ base: (await duneDb.listBases(db)).rows.find((row) => String(row.id) === decodeURIComponent(path.split("/")[3])) || null }));
+  if (path.match(/^\/api\/bases\/[^/]+$/) && req.method === "GET") return dbJson(res, async () => ({ base: (await duneDb.listBases(db)).rows.find((row) => String(row.id) === decodeURIComponent(path.split("/")[3])) || null }));
+  if (path.match(/^\/api\/bases\/[^/]+\/export$/)) return exportJson(res, `base-${decodeURIComponent(path.split("/")[3])}.blueprint.json`, () => duneDb.exportBaseAsBlueprint(db, decodeURIComponent(path.split("/")[3])));
+  if (path.match(/^\/api\/bases\/[^/]+\/export-blueprint$/) && req.method === "POST") return dbJson(res, () => duneDb.exportBaseAsBlueprint(db, decodeURIComponent(path.split("/")[3])));
+  if (path === "/api/bases/import" && req.method === "POST") return blockedImportRoute(req, res, "bases.import", "IMPORT BASE", "Base import remains blocked: safe ownership, position, entity ID remapping, and live-service collision rules are not verified for RedBlink databases.");
+  if (path.match(/^\/api\/bases\/[^/]+$/) && req.method === "DELETE") return blockedImportRoute(req, res, "bases.delete", "DELETE BASE", "Base delete remains blocked: deleting a full base requires verified building/placeable/inventory/object graph deletion rules.");
   if (path === "/api/blueprints") return dbJson(res, () => duneDb.listBlueprints(db));
-  if (path.match(/^\/api\/blueprints\/[^/]+$/)) return dbJson(res, async () => ({ blueprint: (await duneDb.listBlueprints(db)).rows.find((row) => String(row.id) === decodeURIComponent(path.split("/")[3])) || null }));
-  if (path.match(/^\/api\/blueprints\/[^/]+\/export$/)) return exportJson(res, `blueprint-${decodeURIComponent(path.split("/")[3])}.json`, async () => ({ blueprint: (await duneDb.listBlueprints(db)).rows.find((row) => String(row.id) === decodeURIComponent(path.split("/")[3])) || null }));
+  if (path.match(/^\/api\/blueprints\/[^/]+$/) && req.method === "GET") return dbJson(res, async () => ({ blueprint: (await duneDb.listBlueprints(db)).rows.find((row) => String(row.id) === decodeURIComponent(path.split("/")[3])) || null }));
+  if (path.match(/^\/api\/blueprints\/[^/]+\/export$/)) return exportJson(res, `blueprint-${decodeURIComponent(path.split("/")[3])}.json`, () => duneDb.exportBlueprintFull(db, decodeURIComponent(path.split("/")[3])));
+  if (path === "/api/blueprints/import" && req.method === "POST") return blockedImportRoute(req, res, "blueprints.import", "IMPORT BLUEPRINT", "Blueprint import remains blocked: arrakis-admin import requires verified offline-player backpack ownership, blueprint item stat shape, and ID remapping rules that RedBlink does not expose through a safe CLI path.");
+  if (path.match(/^\/api\/blueprints\/[^/]+$/) && req.method === "DELETE") return blockedImportRoute(req, res, "blueprints.delete", "DELETE BLUEPRINT", "Blueprint delete remains blocked: safe item/blueprint graph deletion rules are not verified.");
+  if (path.match(/^\/api\/blueprints\/[^/]+\/clone$/) && req.method === "POST") return blockedImportRoute(req, res, "blueprints.clone", "CLONE BLUEPRINT", "Blueprint clone remains blocked: clone requires verified blueprint item creation, stat wiring, and inventory ownership rules.");
+
+  if (path === "/api/market/capabilities") return dbJson(res, () => duneDb.marketCapabilities(db));
+  if (path === "/api/market/items") return dbJson(res, () => duneDb.marketItems(db, queryParams(url, ["q", "limit", "offset"])));
+  if (path === "/api/market/search") return dbJson(res, () => duneDb.marketItems(db, { q: url.searchParams.get("q") || "", limit: url.searchParams.get("limit") || 100 }));
+  if (path === "/api/market/listings") return dbJson(res, () => duneDb.marketListings(db, { templateId: url.searchParams.get("template_id") || "", owner: url.searchParams.get("owner") || "", limit: url.searchParams.get("limit") || 500, offset: url.searchParams.get("offset") || 0 }));
+  if (path === "/api/market/sales") return dbJson(res, () => duneDb.marketSales(db, { limit: url.searchParams.get("limit") || 200 }));
+  if (path === "/api/market/stats") return dbJson(res, () => duneDb.marketStats(db));
+  if (path === "/api/market/categories") return json(res, 200, { categories: [...new Set(listCatalogItems(config.repoRoot, { limit: 2000 }).map((item) => item.category).filter(Boolean))].sort() });
+  if (path === "/api/market/catalog") return json(res, 200, { rows: listCatalogItems(config.repoRoot, { q: url.searchParams.get("q") || "", limit: url.searchParams.get("limit") || 500 }) });
+  if (path === "/api/market/automation/status") return json(res, 200, marketAutomationUnsupported());
+  if (path === "/api/market/automation/history") return json(res, 200, { rows: [], ...marketAutomationUnsupported() });
+  if (path.startsWith("/api/market/automation/") && req.method === "POST") return unsupportedMutation(req, res, `market.${path.split("/").pop()}`, marketAutomationUnsupported().reason);
+
+  if (path === "/api/starter-kit/capabilities") return json(res, 200, starterKitCapabilities());
+  if (path === "/api/starter-kit/config" && req.method === "POST") return starterKitConfigRoute(req, res);
+  if (path === "/api/starter-kit/config") return json(res, 200, starterKitConfig(config));
+  if (path === "/api/starter-kit/grants" || path === "/api/starter-kit/history") return json(res, 200, starterKitHistory(config, url.searchParams.get("limit") || 100));
+  if (path === "/api/starter-kit/run" && req.method === "POST") return unsupportedMutation(req, res, "starter-kit.run", starterKitCapabilities().reason);
+  if (path.match(/^\/api\/starter-kit\/grant\/[^/]+$/) && req.method === "POST") return starterKitGrantRoute(req, res, path);
+  if (path.match(/^\/api\/starter-kit\/retry\/[^/]+$/) && req.method === "POST") return starterKitRetryRoute(req, res, path);
+  if (path === "/api/starter-kit/enable" && req.method === "POST") return starterKitEnableRoute(req, res, true);
+  if (path === "/api/starter-kit/disable" && req.method === "POST") return starterKitEnableRoute(req, res, false);
 
   if (path === "/api/map/status") return mapStatusRoute(res);
   if (path === "/api/map/capabilities") return dbJson(res, () => duneDb.liveMapCapabilities(db));
@@ -300,7 +329,8 @@ async function dbJson(res, fn) {
   try {
     return json(res, 200, await fn());
   } catch (error) {
-    return json(res, 500, { error: redact(error.message || error) });
+    const status = error.unsupported ? 501 : 500;
+    return json(res, status, { supported: false, error: redact(error.message || error), reason: redact(error.message || error), details: error.details || undefined });
   }
 }
 
@@ -313,7 +343,8 @@ async function exportJson(res, filename, fn) {
     });
     res.end(JSON.stringify(data, null, 2));
   } catch (error) {
-    json(res, 500, { error: redact(error.message || error) });
+    const status = error.unsupported ? 501 : 500;
+    json(res, status, { supported: false, error: redact(error.message || error), reason: redact(error.message || error), details: error.details || undefined });
   }
 }
 
@@ -402,6 +433,89 @@ async function unsupportedMutation(req, res, action, reason, phrase = "") {
   }
   audit(config, req, action, { supported: false, reason });
   return json(res, 501, { supported: false, reason, error: reason });
+}
+
+async function blockedImportRoute(req, res, action, phrase, reason) {
+  const body = await readJson(req);
+  if (body.confirmation !== phrase) {
+    return json(res, 400, { error: `Confirmation phrase required: ${phrase}` });
+  }
+  if (action.includes("import")) {
+    try {
+      if (action.startsWith("blueprints")) duneDb.validateBlueprintPayload(body.payload || body);
+      if (action.startsWith("bases")) duneDb.validateBasePayload(body.payload || body);
+    } catch (error) {
+      return json(res, 400, { error: redact(error.message || error) });
+    }
+  }
+  audit(config, req, action, { supported: false, reason });
+  return json(res, 501, { supported: false, reason, error: reason });
+}
+
+async function starterKitConfigRoute(req, res) {
+  const body = await readJson(req);
+  if (body.confirmation !== "SAVE STARTER KIT") return json(res, 400, { error: "Confirmation phrase required: SAVE STARTER KIT" });
+  try {
+    const saved = saveStarterKitConfig(config, body);
+    audit(config, req, "starter-kit.config", { supported: true, enabled: saved.enabled, version: saved.version, itemCount: saved.items.length, xp: saved.xp });
+    return json(res, 200, saved);
+  } catch (error) {
+    audit(config, req, "starter-kit.config", { supported: false, error: redact(error.message || error) });
+    return json(res, 400, { error: redact(error.message || error) });
+  }
+}
+
+async function starterKitEnableRoute(req, res, enabled) {
+  const body = await readJson(req);
+  const phrase = enabled ? "ENABLE STARTER KIT" : "DISABLE STARTER KIT";
+  if (body.confirmation !== phrase) return json(res, 400, { error: `Confirmation phrase required: ${phrase}` });
+  try {
+    const saved = enableStarterKit(config, enabled);
+    audit(config, req, enabled ? "starter-kit.enable" : "starter-kit.disable", { supported: true, version: saved.version });
+    return json(res, 200, saved);
+  } catch (error) {
+    return json(res, 400, { error: redact(error.message || error) });
+  }
+}
+
+async function starterKitGrantRoute(req, res, path) {
+  const playerId = decodeURIComponent(path.split("/")[4]);
+  try {
+    const result = await grantStarterKit(config, playerId, await readJson(req));
+    audit(config, req, "starter-kit.grant", { supported: true, playerId, ok: result.ok, grantId: result.id });
+    return json(res, result.ok ? 200 : 207, result);
+  } catch (error) {
+    audit(config, req, "starter-kit.grant", { supported: false, playerId, error: redact(error.message || error) });
+    return json(res, 400, { error: redact(error.message || error) });
+  }
+}
+
+async function starterKitRetryRoute(req, res, path) {
+  const grantId = decodeURIComponent(path.split("/")[4]);
+  try {
+    const result = await retryStarterKitGrant(config, grantId, await readJson(req));
+    audit(config, req, "starter-kit.retry", { supported: true, grantId, ok: result.ok, retryGrantId: result.id });
+    return json(res, result.ok ? 200 : 207, result);
+  } catch (error) {
+    audit(config, req, "starter-kit.retry", { supported: false, grantId, error: redact(error.message || error) });
+    return json(res, 400, { error: redact(error.message || error) });
+  }
+}
+
+function queryParams(url, names) {
+  const out = {};
+  for (const name of names) out[name] = url.searchParams.get(name) || "";
+  return out;
+}
+
+function marketAutomationUnsupported() {
+  return {
+    supported: false,
+    running: false,
+    enabled: false,
+    mode: "none",
+    reason: "Market automation is blocked: arrakis-admin uses an embedded or remote market-bot runtime with its own config, lifecycle, cleanup, and history APIs. RedBlink does not currently provide a compatible market-bot service or CLI wrapper in this Docker stack."
+  };
 }
 
 async function playerDbMutation(req, res, path, action, phrase, fn) {

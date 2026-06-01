@@ -37,6 +37,7 @@ Direct Postgres features must:
 
 Phase 5A direct DB admin mutations follow the same pattern: the API first verifies the backend confirmation phrase, creates a RedBlink DB backup with `dune db backup`, then runs a parameterized transaction. Supported write paths are Solaris/currency via `dune.adjust_player_virtual_currency_balance`, faction reputation via `dune.set_player_faction_reputation`, inventory delete via `dune.delete_item`, storage item insert into verified `dune.items`/`dune.inventories`, gear durability JSON repair, and owned vehicle fuel JSON update. If required tables/functions/columns are not detected, the endpoint returns a clear unsupported capability response instead of attempting a write.
 
+
 ## RabbitMQ Safety
 
 RabbitMQ live commands must:
@@ -45,6 +46,7 @@ RabbitMQ live commands must:
 - validate target player/account IDs
 - audit every broadcast, whisper, kick, item grant, teleport, or live command
 - avoid exposing a generic message publisher to the browser
+
 
 
 Destructive live actions require backend confirmation phrases in addition to frontend confirmation:
@@ -67,6 +69,13 @@ Destructive live actions require backend confirmation phrases in addition to fro
 - map memory set/unset: `SET MAP MEMORY` / `UNSET MAP MEMORY`
 - Sietch live-impacting changes: `UPDATE SIETCHES`
 - Deep Desert dual controls: `UPDATE DEEP DESERT`
+- Starter Kit config: `SAVE STARTER KIT`
+- Starter Kit enable/disable: `ENABLE STARTER KIT` / `DISABLE STARTER KIT`
+- Starter Kit manual grant/retry: `GRANT STARTER KIT` / `RETRY STARTER KIT`
+- blueprint import/clone/delete blocked paths: `IMPORT BLUEPRINT` / `CLONE BLUEPRINT` / `DELETE BLUEPRINT`
+- base import/delete blocked paths: `IMPORT BASE` / `DELETE BASE`
+
+Market automation, blueprint/base graph writes, Starter Kit automatic scanner, and whisper are not exposed as generic command or message publishers. They return explicit unsupported responses until a verified RedBlink-compatible runtime or schema/RMQ mutation path exists.
 
 ## Live Map Safety
 
