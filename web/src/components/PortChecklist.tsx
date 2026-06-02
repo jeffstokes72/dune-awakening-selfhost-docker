@@ -3,12 +3,11 @@ export function PortChecklist({ text }: { text: string }) {
   const warnings = parseNetworkWarnings(text);
   return <section className="action-section">
     <h4>Ports / Listeners</h4>
-    {warnings.map((warning, index) => <article className="warning-panel action-section" key={`${warning}-${index}`}>
-      <strong>Network Warning</strong>
+    {warnings.map((warning, index) => <article className="info-panel action-section" key={`${warning}-${index}`}>
+      <strong>Network Note</strong>
       <p>{warning}</p>
     </article>)}
     {rows.length ? <div className="table-wrap"><table><thead><tr><th>Name</th><th>Port</th><th>Protocol</th><th>Status</th><th>Details</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.name}-${index}`}><td>{row.name}</td><td>{row.port}</td><td>{row.protocol}</td><td><span className={`badge badge-${row.kind}`}>{row.status}</span></td><td>{row.detail}</td></tr>)}</tbody></table></div> : <p>Run port checks to see listener status.</p>}
-    <details className="technical-details"><summary>Advanced port output</summary><pre className="mini-output">{text || "Run port checks to see listener status."}</pre></details>
   </section>;
 }
 
@@ -62,8 +61,8 @@ function friendlyPortName(raw: string, port: string, protocol: string) {
   if (/survival.*client/.test(normalized)) return "Survival 1 Clients";
   if (/overmap.*game/.test(normalized)) return "Overmap Game";
   if (/survival.*game/.test(normalized)) return "Survival 1 Game";
-  if (/survival.*s2s|survival.*igw/.test(normalized)) return "Survival 1 IGW";
-  if (/overmap.*s2s|overmap.*igw/.test(normalized)) return "Overmap IGW";
+  if (/survival.*s2s|survival.*igw/.test(normalized)) return "Survival 1 S2S";
+  if (/overmap.*s2s|overmap.*igw/.test(normalized)) return "Overmap S2S";
   if (/rabbit.*game.*http/.test(normalized)) return "RabbitMQ Game HTTP";
   if (/rabbit.*game/.test(normalized)) return "RabbitMQ Game";
   if (/rabbit.*admin/.test(normalized)) return "RabbitMQ Admin";

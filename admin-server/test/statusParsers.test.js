@@ -40,6 +40,7 @@ OK   container dune-rmq-game
 
 === Listener checks ===
 OK   TCP 15432 Postgres localhost
+OK   world_partition rows: 30
 READY: Dune Awakening Self-Host Docker stack looks healthy.`);
   assert.deepEqual(rows.map((row) => row.label), [
     "container dune-postgres",

@@ -10,7 +10,6 @@ export function ReadinessTimeline({ text }: { text: string }) {
         <span className={`badge badge-${check.kind}`}>{check.status}</span>
       </article>)}</div>
     </section> : null)}</div> : <p>Readiness has not been checked yet.</p>}
-    <details className="technical-details"><summary>Advanced readiness output</summary><pre className="mini-output">{text || "Readiness has not been checked yet."}</pre></details>
   </section>;
 }
 
@@ -37,21 +36,25 @@ function parseChecks(text: string) {
 function groupChecks(checks: ReturnType<typeof parseChecks>) {
   return checks.reduce<Record<string, typeof checks>>((groups, check) => {
     const text = `${check.name} ${check.detail}`.toLowerCase();
-    const group = /dune postgres|rabbitmq admin|rabbitmq game|text router|dune director|gateway|survival 1$|overmap$|orchestrator/.test(text) ? "Container Checks" :
-      /listener|port|tcp|udp|listen/.test(text) ? "Listener Checks" :
-        /database|partition|world/.test(text) ? "Database Checks" :
-          /ready|warming|server|survival|overmap|dynamic|idle|map/.test(text) ? "Game Server Checks" :
-            /rabbit|rmq|fls|funcom|heartbeat|population|gateway db|monitoring/.test(text) ? "RabbitMQ / FLS Checks" :
-              "Other Checks";
+    let group = "Other Checks";
+    if (/database|partition|world/.test(text)) group = "";
+    else if (/listener|port|tcp|udp|listen/.test(text)) group = "Listener Checks";
+    else if (/rabbit|rmq|sg\b|connections/.test(text)) group = "RabbitMQ Game Connections";
+    else if (/fls|funcom|heartbeat|population declaration|max capacity|gateway db|monitoring/.test(text)) group = "Funcom/FLS Summary";
+    else if (/dynamic|idle|map/.test(text)) group = "Dynamic Game Map";
+    else if (/dune postgres|rabbitmq admin|rabbitmq game|text router|dune director|^gateway$|^survival 1$|^overmap$|orchestrator/.test(text)) group = "Container Checks";
+    else if (/ready|warming|server|survival|overmap/.test(text)) group = "Game Server Checks";
+    if (!group) return groups;
     groups[group] ||= [];
     groups[group].push(check);
     return groups;
   }, {
     "Container Checks": [],
     "Listener Checks": [],
-    "Database Checks": [],
     "Game Server Checks": [],
-    "RabbitMQ / FLS Checks": [],
+    "RabbitMQ Game Connections": [],
+    "Funcom/FLS Summary": [],
+    "Dynamic Game Map": [],
     "Other Checks": []
   });
 }

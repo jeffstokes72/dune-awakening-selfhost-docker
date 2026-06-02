@@ -8,7 +8,7 @@ export function parseHomeStatus(text) {
 }
 
 export function parseReadyRows(text) {
-  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^(OK|WAIT|FAIL)\s+/.test(line)).map((line) => ({
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^(OK|WAIT|FAIL)\s+/.test(line) && !/world_partition|partition/i.test(line)).map((line) => ({
     status: line.startsWith("OK") ? "Ready" : line.startsWith("WAIT") ? "Warn" : "Failed",
     label: line.replace(/^(OK|WAIT|FAIL)\s+/, "")
   }));

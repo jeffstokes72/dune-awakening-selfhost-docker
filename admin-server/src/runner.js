@@ -195,7 +195,8 @@ export function runDune(config, args, options = {}) {
     child.on("close", (code, signal) => {
       clearTimeout(timeout);
       const result = { code, signal, stdout, stderr, args };
-      if (code === 0) resolve(result);
+      const allowedExitCodes = options.allowedExitCodes || [0];
+      if (allowedExitCodes.includes(code)) resolve(result);
       else reject(Object.assign(new Error(`dune ${args.join(" ")} failed with exit ${code}`), result));
     });
   });

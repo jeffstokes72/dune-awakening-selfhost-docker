@@ -56,6 +56,7 @@ export class TaskManager {
         this.emit(task, `Running ${operation}`);
         const args = buildDuneArgs(operation, payload);
         const result = await runDune(this.config, args, {
+          allowedExitCodes: operation === "updateCheck" ? [0, 100] : [0],
           onLine: (text, stream) => this.append(task, text, stream)
         });
         lastCode = result.code;

@@ -70,17 +70,21 @@ main { padding: 22px; min-width: 0; }
 .action-section p { margin: 0; color: #ad9f89; }
 .danger-section { border-color: #6f3030; background: #1b1414; }
 .warning-panel { border-color: #a97932; background: #211b12; }
+.info-panel { border-color: #385067; background: #111922; }
 .action-line { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .action-line label { flex: 0 1 180px; }
+.action-line label.compact-field { flex: 0 0 140px; }
 .action-line label.broadcast-message { flex: 1 1 320px; }
 .action-line label.wide-field { flex: 1 1 420px; }
 .action-line label.checkbox-line { flex: 0 0 280px; }
 .action-line button, .action-section > button { width: auto; justify-self: start; }
+.restart-service-line { align-items: end; margin: 18px 0 22px; }
 .broadcast-line { align-items: end; }
 .broadcast-line button { margin-bottom: 0; }
 .actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
 .actions-grid > button { justify-self: start; }
-.catalog-selector { display: grid; gap: 10px; }
+.catalog-selector { display: grid; gap: 10px; max-width: 860px; }
+.catalog-selector .key-value-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 .service-card, .check-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #171a1d; border: 1px solid #302b25; border-radius: 8px; padding: 14px; }
 .service-card div, .check-card div { display: grid; gap: 4px; }
 .service-card span, .check-card p { margin: 0; color: #ad9f89; }
