@@ -111,10 +111,12 @@ export function App() {
           <button onClick={() => safe(async () => setStatus((await serverApi.status()).stdout))}><Activity size={16} /> Refresh</button>
         </header>
         {error && <div className="error-banner">{error}</div>}
-        {tab === "Home" && <HomePanel status={status} readiness={readiness} setTask={setTask} onLoad={() => safe(async () => {
-          setStatus((await serverApi.status()).stdout);
-          setReadiness((await serverApi.readiness()).stdout);
-        })} />}
+        {tab === "Home" && <HomePanel status={status} readiness={readiness} setTask={setTask} onLoad={async () => {
+          setError("");
+          const [nextStatus, nextReadiness] = await Promise.all([serverApi.status(), serverApi.readiness()]);
+          setStatus(nextStatus.stdout);
+          setReadiness(nextReadiness.stdout);
+        }} />}
         {tab === "Setup" && <SetupWizard />}
         {tab === "Server Control" && <ServerPanel setTask={setTask} setStatus={setStatus} setReadiness={setReadiness} setPorts={setPorts} setDoctor={setDoctor} ports={ports} readiness={readiness} doctor={doctor} onError={setError} />}
         {tab === "Services" && <ServicesPanel services={services} setServices={setServices} setTask={setTask} openLogs={(service) => { setSelectedLogService(service); setTab("Logs"); }} onError={setError} />}
@@ -138,10 +140,52 @@ export function App() {
   );
 }
 
-function HomePanel({ status, readiness, setTask, onLoad }: { status: string; readiness: string; setTask: (task: Task) => void; onLoad: () => void }) {
+function HomePanel({ status, readiness, setTask, onLoad }: { status: string; readiness: string; setTask: (task: Task) => void; onLoad: () => Promise<void> }) {
+  const [loading, setLoading] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [hasLoaded, setHasLoaded] = useState(Boolean(status || readiness));
+
+  async function refresh(isActive = () => true) {
+    setLoading(true);
+    setLocalError("");
+    try {
+      await onLoad();
+      if (isActive()) setHasLoaded(true);
+    } catch (error) {
+      if (isActive()) setLocalError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (isActive()) setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    onLoad();
+    let active = true;
+    refresh(() => active);
+    return () => { active = false; };
   }, []);
+
+  if (loading && !hasLoaded) {
+    return <section className="grid">
+      <article className="hero-panel wide loading-panel">
+        <span className="spinner" aria-hidden="true" />
+        <div>
+          <h2>Checking server status...</h2>
+          <p>Checking readiness...</p>
+          <p>This can take a few seconds while Docker and Dune health checks run.</p>
+        </div>
+      </article>
+    </section>;
+  }
+
+  if (localError && !hasLoaded) {
+    return <section className="grid">
+      <article className="hero-panel wide">
+        <h2>Server status unavailable</h2>
+        <p className="error">{localError}</p>
+        <button onClick={() => refresh()}>Retry Status Check</button>
+      </article>
+    </section>;
+  }
 
   return (
     <section className="grid">
@@ -149,11 +193,12 @@ function HomePanel({ status, readiness, setTask, onLoad }: { status: string; rea
         <h2>Server Overview</h2>
         <p>Use this dashboard for setup, service health, logs, backups, updates, and player admin actions.</p>
         <div className="action-row">
-          <button onClick={onLoad}>Refresh Status</button>
+          <button disabled={loading} onClick={() => refresh()}>{loading ? "Refreshing..." : "Refresh Status"}</button>
           <button onClick={async () => setTask((await serverApi.start()).task)}><Play size={16} /> Start</button>
           <button onClick={async () => window.confirm("Stop the Dune server stack?") && setTask((await serverApi.stop()).task)}>Stop</button>
           <button onClick={async () => window.confirm("Restart the Dune server stack?") && setTask((await serverApi.restart()).task)}>Restart</button>
         </div>
+        {localError && <p className="error">{localError}</p>}
       </article>
       <ServiceHealthCard name="Runtime" status={status ? "checked" : "unknown"} />
       <ServiceHealthCard name="Readiness" status={readiness ? "checked" : "unknown"} />
@@ -459,14 +504,19 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
             {selectedTemplates.length === 0 && <option value="">Manual template</option>}
             {selectedTemplates.map((template) => <option key={template} value={template}>{template}</option>)}
           </select></label>
-          <label>Manual Vehicle ID<input value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} placeholder="Sandbike" /></label>
-          <label>Manual Template<input value={vehicleTemplate} onChange={(event) => setVehicleTemplate(event.target.value)} placeholder="T1_ExtraSeat" /></label>
           <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
             const knownTemplates = Object.values(vehicleCatalog).flat();
             if (knownTemplates.includes(vehicleId) && !vehicleCatalog[vehicleId]) throw new Error(`${vehicleId} is a vehicle template, not a vehicle ID. Choose a vehicle such as Sandbike, then choose ${vehicleId} as the template.`);
             if (window.confirm(`Spawn ${vehicleId}/${vehicleTemplate} in front of player ${actionPlayerId}?`)) await runTask(() => playersApi.spawnVehicle(actionPlayerId, { vehicleId, template: vehicleTemplate, offset: 400 }));
           })}>Spawn Vehicle</button>
         </div>
+        <details>
+          <summary>Advanced manual override</summary>
+          <div className="actions-grid">
+            <label>Manual Vehicle ID<input value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} placeholder="Sandbike" /></label>
+            <label>Manual Template<input value={vehicleTemplate} onChange={(event) => setVehicleTemplate(event.target.value)} placeholder="T1_ExtraSeat" /></label>
+          </div>
+        </details>
       </section>
 
       <section className="action-section">

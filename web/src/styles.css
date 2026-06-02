@@ -49,6 +49,9 @@ main { padding: 22px; min-width: 0; }
 .login-screen { display: grid; min-height: 100vh; place-items: center; }
 .login-panel, .panel, .hero-panel { background: rgba(23, 24, 26, .92); border: 1px solid #312a22; border-radius: 8px; padding: 20px; box-shadow: 0 16px 60px rgba(0,0,0,.35); }
 .login-panel { width: min(440px, calc(100vw - 32px)); display: grid; gap: 14px; }
+.loading-panel { display: flex; align-items: center; gap: 16px; }
+.spinner { width: 28px; height: 28px; border: 3px solid #4d4032; border-top-color: #ffd08a; border-radius: 50%; animation: spin 1s linear infinite; flex: 0 0 auto; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .wide { grid-column: 1 / -1; }
 .panel-title, .action-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
