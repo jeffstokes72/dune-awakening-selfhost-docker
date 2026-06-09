@@ -215,25 +215,25 @@ function validateShutdownType(value) {
 function validateWhisperIdentity(value, label) {
   const raw = String(value || "").trim();
   if (/^[A-Za-z0-9_#.@:+/-]{1,180}$/.test(raw)) return raw;
-  throw new Error(`Care Package welcome whisper cannot be sent: ${label} is unavailable or invalid`);
+  throw new Error(`Care Package message whisper cannot be sent: ${label} is unavailable or invalid`);
 }
 
 function validateWhisperName(value, label) {
   const raw = String(value || "").trim();
   if (raw.length >= 1 && raw.length <= 80 && !/[\u0000-\u001f]/.test(raw)) return raw;
-  throw new Error(`Care Package welcome whisper cannot be sent: ${label} is unavailable or invalid`);
+  throw new Error(`Care Package message whisper cannot be sent: ${label} is unavailable or invalid`);
 }
 
 function validateHexFlsId(value) {
   const raw = String(value || "").trim();
   if (/^[A-Fa-f0-9]{16,64}$/.test(raw)) return raw;
-  throw new Error("Care Package welcome whisper cannot be sent: sender hex FLS ID is unavailable or invalid");
+  throw new Error("Care Package message whisper cannot be sent: sender hex FLS ID is unavailable or invalid");
 }
 
 function validateQueueName(value, label) {
   const raw = String(value || "").trim();
   if (/^[A-Za-z0-9_.:+/-]{1,220}$/.test(raw)) return raw;
-  throw new Error(`Care Package welcome whisper cannot be sent: ${label} is unavailable or invalid`);
+  throw new Error(`Care Package message whisper cannot be sent: ${label} is unavailable or invalid`);
 }
 
 function validateMessageId(value) {

@@ -5,7 +5,7 @@ import { buildDuneArgs, runDune } from "./runner.js";
 import { resolveCatalogItem } from "./adminCatalog.js";
 import { publishCarePackageWhisper } from "./rmq.js";
 
-const DEFAULT_KIT_ID = "starter-kit-v1";
+const DEFAULT_KIT_ID = "care-package-v1";
 const CARE_PACKAGE_SERVER_PERSONA = {
   accountId: "9000002",
   funcomId: "Server#0001",
@@ -20,7 +20,7 @@ const DEFAULT_KIT = {
   name: "Care Package",
   items: [],
   xp: 0,
-  welcomeMessage: ""
+  sendMessage: ""
 };
 
 const DEFAULT_CONFIG = {
@@ -38,7 +38,7 @@ const DEFAULT_CONFIG = {
   autoGrantRules: [{ id: "auto-rule-1", enabled: true, kitId: DEFAULT_KIT_ID, grantWhen: "first_online", lastSeenDays: 30 }]
 };
 
-export function starterKitCapabilities() {
+export function carePackageCapabilities() {
   return {
     config: true,
     manualGrant: true,
@@ -50,23 +50,23 @@ export function starterKitCapabilities() {
   };
 }
 
-export function starterKitConfig(config) {
+export function carePackageConfig(config) {
   return readConfig(config);
 }
 
-export function saveStarterKitConfig(config, body) {
-  const next = validateStarterKitConfig(body);
+export function saveCarePackageConfig(config, body) {
+  const next = validateCarePackageConfig(body);
   writeConfig(config, next);
   return next;
 }
 
-export function enableStarterKit(config, enabled) {
+export function enableCarePackage(config, enabled) {
   const next = { ...readConfig(config), enabled: Boolean(enabled) };
   writeConfig(config, next);
   return next;
 }
 
-export function starterKitHistory(config, limit = 100) {
+export function carePackageHistory(config, limit = 100) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
   const file = grantsPath(config);
   if (!existsSync(file)) return { rows: [] };
@@ -81,7 +81,7 @@ export function starterKitHistory(config, limit = 100) {
   return { rows };
 }
 
-export function clearStarterKitHistory(config) {
+export function clearCarePackageHistory(config) {
   const file = grantsPath(config);
   const removed = existsSync(file) ? readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
   mkdirSync(dirname(file), { recursive: true });
@@ -119,11 +119,11 @@ function summarizeStoredRow(row, status) {
   return status;
 }
 
-export function starterKitEligiblePlayers(config, players = [], options = {}) {
+export function carePackageEligiblePlayers(config, players = [], options = {}) {
   const kitConfig = readConfig(config);
   const rule = options.ruleId ? kitConfig.autoGrantRules.find((entry) => entry.id === options.ruleId) : null;
   const kit = rule ? selectedKit(kitConfig, rule.kitId, rule.grantWhen, rule.lastSeenDays) : selectedKit(kitConfig, kitConfig.autoGrantKitId);
-  const history = starterKitHistory(config, 500).rows;
+  const history = carePackageHistory(config, 500).rows;
   const rows = players.map((player) => eligibilityForPlayer(kit, history, normalizePlayer(player)));
   return {
     config: kitConfig,
@@ -133,13 +133,13 @@ export function starterKitEligiblePlayers(config, players = [], options = {}) {
   };
 }
 
-export async function grantEligibleStarterKits(config, players = [], body = {}, context = {}) {
-  const phrase = "GRANT STARTER KIT TO ELIGIBLE PLAYERS";
+export async function grantEligibleCarePackages(config, players = [], body = {}, context = {}) {
+  const phrase = "GRANT CARE PACKAGE TO ELIGIBLE PLAYERS";
   if (body.confirmation !== phrase) throw new Error(`Confirmation phrase required: ${phrase}`);
   const kitConfig = readConfig(config);
   const kit = selectedKit(kitConfig, kitConfig.autoGrantKitId);
   if (!kit.items.length && !kit.xp) throw new Error("Care Package has no configured items or XP");
-  const rows = starterKitEligiblePlayers(config, players).rows;
+  const rows = carePackageEligiblePlayers(config, players).rows;
   const results = [];
   for (const player of rows) {
     if (!player.eligible) {
@@ -148,8 +148,8 @@ export async function grantEligibleStarterKits(config, players = [], body = {}, 
       continue;
     }
     try {
-      results.push(await grantStarterKit(config, player.action_player_id, {
-        confirmation: "GRANT STARTER KIT",
+      results.push(await grantCarePackage(config, player.action_player_id, {
+        confirmation: "GRANT CARE PACKAGE",
         source: "bulk",
         characterName: player.character_name,
         actorId: player.actor_id,
@@ -164,7 +164,7 @@ export async function grantEligibleStarterKits(config, players = [], body = {}, 
   return summarizeGrantResults(results);
 }
 
-export async function runStarterKitAutoScan(config, players = [], source = "auto", context = {}) {
+export async function runCarePackageAutoScan(config, players = [], source = "auto", context = {}) {
   const kitConfig = readConfig(config);
   if (!kitConfig.enabled) return { ok: true, skipped: true, reason: "Care Package is disabled", results: [] };
   if (!kitConfig.autoGrantEnabled) return { ok: true, skipped: true, reason: "Auto-grant is disabled", results: [] };
@@ -177,7 +177,7 @@ export async function runStarterKitAutoScan(config, players = [], source = "auto
       results.push(failedGrant(config, kit, { action_player_id: "", actor_id: "", character_name: "" }, "Care Package has no configured items or XP", source));
       continue;
     }
-    const history = starterKitHistory(config, 500).rows;
+    const history = carePackageHistory(config, 500).rows;
     const rows = players.map((player) => eligibilityForPlayer(kit, history, normalizePlayer(player), { requireOnline: true }));
     for (const player of rows) {
       if (!player.eligible) {
@@ -185,8 +185,8 @@ export async function runStarterKitAutoScan(config, players = [], source = "auto
         continue;
       }
       try {
-        results.push(await grantStarterKit(config, player.action_player_id, {
-          confirmation: "GRANT STARTER KIT",
+        results.push(await grantCarePackage(config, player.action_player_id, {
+          confirmation: "GRANT CARE PACKAGE",
           source,
           kitId: kit.id,
           characterName: player.character_name,
@@ -202,8 +202,8 @@ export async function runStarterKitAutoScan(config, players = [], source = "auto
   return summarizeGrantResults(results);
 }
 
-export async function grantStarterKit(config, playerId, body = {}, context = {}) {
-  const phrase = "GRANT STARTER KIT";
+export async function grantCarePackage(config, playerId, body = {}, context = {}) {
+  const phrase = "GRANT CARE PACKAGE";
   if (body.confirmation !== phrase) throw new Error(`Confirmation phrase required: ${phrase}`);
   const kitConfig = readConfig(config);
   const source = body.source || "manual";
@@ -217,12 +217,12 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
   const grantId = randomUUID();
   const startedAt = new Date().toISOString();
   const results = [];
-  if (kit.welcomeMessage) {
+  if (kit.sendMessage) {
     try {
       const persona = await ensureCarePackageServerPersona(context.db);
       const recipient = resolveWelcomeWhisperRecipient(playerId, body);
       const result = config.mockMode
-        ? { code: 0, stdout: "mock care package welcome whisper\n", stderr: "", payload: null }
+        ? { code: 0, stdout: "mock care package message whisper\n", stderr: "", payload: null }
         : await publishCarePackageWhisper(config, {
             recipientFuncomId: recipient.funcomId,
             recipientCharacterName: recipient.characterName,
@@ -230,7 +230,7 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
             senderFuncomId: persona.funcomId,
             senderHexFlsId: persona.hexFlsId,
             amqpUserId: persona.hexFlsId,
-            message: kit.welcomeMessage
+            message: kit.sendMessage
           });
       results.push({
         ok: true,
@@ -258,7 +258,7 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
         durability: item.durability
       };
       const command = buildDuneArgs(operation, payload);
-      const result = config.mockMode ? { code: 0, stdout: "mock starter item grant\n", stderr: "" } : await runDune(config, command);
+      const result = config.mockMode ? { code: 0, stdout: "mock package item grant\n", stderr: "" } : await runDune(config, command);
       results.push({ ok: true, operation, item: payload, stdout: result.stdout, stderr: result.stderr, exitCode: result.code });
     } catch (error) {
       results.push({ ok: false, item, error: error.message || String(error) });
@@ -268,7 +268,7 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
     try {
       const payload = { playerId, amount: kit.xp };
       const command = buildDuneArgs("adminAddXp", payload);
-      const result = config.mockMode ? { code: 0, stdout: "mock starter xp grant\n", stderr: "" } : await runDune(config, command);
+      const result = config.mockMode ? { code: 0, stdout: "mock package xp grant\n", stderr: "" } : await runDune(config, command);
       results.push({ ok: true, operation: "adminAddXp", amount: kit.xp, stdout: result.stdout, stderr: result.stderr, exitCode: result.code });
     } catch (error) {
       results.push({ ok: false, operation: "adminAddXp", amount: kit.xp, error: error.message || String(error) });
@@ -280,18 +280,18 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
   return row;
 }
 
-export async function retryStarterKitGrant(config, grantId, body = {}, context = {}) {
-  const phrase = "RETRY STARTER KIT";
+export async function retryCarePackageGrant(config, grantId, body = {}, context = {}) {
+  const phrase = "RETRY CARE PACKAGE";
   if (body.confirmation !== phrase) throw new Error(`Confirmation phrase required: ${phrase}`);
-  const existing = starterKitHistory(config, 500).rows.find((row) => row.id === grantId);
+  const existing = carePackageHistory(config, 500).rows.find((row) => row.id === grantId);
   if (!existing) throw new Error("Care Package grant was not found");
   if (existing.ok) throw new Error("Only failed Care Package grants can be retried");
-  return grantStarterKit(config, existing.playerId, { confirmation: "GRANT STARTER KIT", kitId: existing.kitId || existing.version, characterName: existing.character_name, actorId: existing.actor_id }, context);
+  return grantCarePackage(config, existing.playerId, { confirmation: "GRANT CARE PACKAGE", kitId: existing.kitId || existing.version, characterName: existing.character_name, actorId: existing.actor_id }, context);
 }
 
-export function validateStarterKitConfig(body = {}) {
+export function validateCarePackageConfig(body = {}) {
   const enabled = Boolean(body.enabled);
-  const kits = validateStarterKits(body);
+  const kits = validateCarePackages(body);
   const activeKitId = validKitId(body.activeKitId, kits) || kits[0]?.id || "";
   const autoGrantKitId = validKitId(body.autoGrantKitId, kits) || activeKitId;
   const activeKit = kits.find((kit) => kit.id === activeKitId) || kits[0] || { id: "", items: [], xp: 0 };
@@ -357,7 +357,7 @@ function normalizePlayer(player = {}) {
 }
 
 function hasSuccessfulGrant(config, playerId, kitId, actorId = "") {
-  return starterKitHistory(config, 500).rows.some((row) => isSuccessfulGrant(row) && (row.kitId || row.version) === kitId && grantMatchesPlayer(row, { action_player_id: playerId, actor_id: actorId }));
+  return carePackageHistory(config, 500).rows.some((row) => isSuccessfulGrant(row) && (row.kitId || row.version) === kitId && grantMatchesPlayer(row, { action_player_id: playerId, actor_id: actorId }));
 }
 
 function isSuccessfulGrant(row) {
@@ -406,7 +406,7 @@ function summarizeActionResults(results) {
 function describeAction(result) {
   if (result.item) return `${result.item.itemName || result.item.itemId || "Item"} x${result.item.quantity || 1}`;
   if (result.operation === "adminAddXp") return `${result.amount || 0} XP`;
-  if (result.operation === "carePackageWelcomeWhisper") return "Welcome whisper";
+  if (result.operation === "carePackageWelcomeWhisper") return "Message whisper";
   return result.operation || "Care Package action";
 }
 
@@ -415,7 +415,7 @@ function selectedKit(config, kitId, grantWhen = config.grantWhen, lastSeenDays =
   return { ...kit, grantWhen, lastSeenDays };
 }
 
-function validateStarterKits(body = {}) {
+function validateCarePackages(body = {}) {
   const rawKits = Array.isArray(body.kits)
     ? body.kits
     : [{
@@ -423,14 +423,14 @@ function validateStarterKits(body = {}) {
         name: body.name || "Care Package",
         items: body.items,
         xp: body.xp,
-        welcomeMessage: body.welcomeMessage
+        sendMessage: body.sendMessage
       }];
   if (rawKits.length > 12) throw new Error("Care Package supports at most 12 packages");
   const used = new Set();
   return rawKits.map((kit, index) => {
     const fallbackName = index === 0 ? "Care Package" : `Care Package ${index + 1}`;
     const name = validateKitName(Object.prototype.hasOwnProperty.call(kit, "name") ? kit.name : fallbackName);
-    let id = validateKitId(kit.id || slugKitName(name) || `starter-kit-${index + 1}`);
+    let id = validateKitId(kit.id || slugKitName(name) || `care-package-${index + 1}`);
     while (used.has(id)) id = `${id}-${index + 1}`;
     used.add(id);
     const rawItems = Array.isArray(kit.items) ? kit.items : [];
@@ -438,9 +438,9 @@ function validateStarterKits(body = {}) {
     return {
       id,
       name,
-      items: rawItems.map(validateStarterKitItem),
+      items: rawItems.map(validateCarePackageItem),
       xp: validateInteger(kit.xp ?? 0, "xp", 0, 100000000),
-      welcomeMessage: validateWelcomeMessage(kit.welcomeMessage ?? "")
+      sendMessage: validateSendMessage(kit.sendMessage ?? "")
     };
   });
 }
@@ -493,7 +493,7 @@ function slugKitName(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
 }
 
-function validateStarterKitItem(item = {}) {
+function validateCarePackageItem(item = {}) {
   const itemName = String(item.itemName || "").trim();
   const itemId = String(item.itemId || "").trim();
   if (!itemName && !itemId) throw new Error("Care Package item requires itemName or itemId");
@@ -507,11 +507,11 @@ function validateStarterKitItem(item = {}) {
   };
 }
 
-function validateWelcomeMessage(value) {
+function validateSendMessage(value) {
   const raw = String(value || "").trim();
   if (raw === "Welcome to the server") return "";
   if (!raw) return "";
-  if (raw.length > 500 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(raw)) throw new Error("Welcome message must be 1-500 printable characters");
+  if (raw.length > 500 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(raw)) throw new Error("Send message must be 1-500 printable characters");
   return raw;
 }
 
@@ -525,13 +525,13 @@ function resolveWelcomeWhisperRecipient(playerId, body = {}) {
   const funcomId = String(body.funcomId || body.recipientFuncomId || body.flsId || (/^[A-Za-z0-9_.-]+#\d+$/.test(String(playerId || "")) ? playerId : "")).trim();
   const flsId = String(body.flsId || body.recipientFlsId || (/^[A-Fa-f0-9]{16,64}$/.test(String(playerId || "")) ? playerId : "")).trim();
   const characterName = String(body.characterName || body.recipientCharacterName || body.userNameTo || "").trim();
-  if (!funcomId) throw new Error("Care Package welcome whisper cannot be sent: recipient Funcom ID is unavailable");
-  if (!characterName) throw new Error("Care Package welcome whisper cannot be sent: recipient character name is unavailable");
+  if (!funcomId) throw new Error("Care Package message whisper cannot be sent: recipient Funcom ID is unavailable");
+  if (!characterName) throw new Error("Care Package message whisper cannot be sent: recipient character name is unavailable");
   return { funcomId, characterName, flsId, queue: flsId ? `${flsId}_queue` : "" };
 }
 
 async function ensureCarePackageServerPersona(db) {
-  if (!db?.query) throw new Error("Care Package welcome whisper cannot be sent: database is unavailable for Server persona setup");
+  if (!db?.query) throw new Error("Care Package message whisper cannot be sent: database is unavailable for Server persona setup");
   const encryptedColumns = await tableColumns(db, "encrypted_accounts");
   if (encryptedColumns.has("id")) {
     const encryptedValues = [["id", CARE_PACKAGE_SERVER_PERSONA.accountId]];
@@ -542,17 +542,17 @@ async function ensureCarePackageServerPersona(db) {
   }
 
   const accountsColumns = await tableColumns(db, "accounts");
-  if (!accountsColumns.has("id")) throw new Error("Care Package welcome whisper cannot be sent: dune.accounts.id is unavailable for Server persona setup");
+  if (!accountsColumns.has("id")) throw new Error("Care Package message whisper cannot be sent: dune.accounts.id is unavailable for Server persona setup");
   if (await isWritableDuneRelation(db, "accounts")) {
     const accountValues = [["id", CARE_PACKAGE_SERVER_PERSONA.accountId]];
     if (accountsColumns.has("user")) accountValues.push(["user", CARE_PACKAGE_SERVER_PERSONA.hexFlsId]);
     if (accountsColumns.has("funcom_id")) accountValues.push(["funcom_id", CARE_PACKAGE_SERVER_PERSONA.funcomId]);
     if (accountsColumns.has("display_name")) accountValues.push(["display_name", CARE_PACKAGE_SERVER_PERSONA.displayName]);
     if (accountsColumns.has("name")) accountValues.push(["name", CARE_PACKAGE_SERVER_PERSONA.displayName]);
-    if (accountValues.length < 2) throw new Error("Care Package welcome whisper cannot be sent: dune.accounts has no Funcom ID column for Server persona setup");
+    if (accountValues.length < 2) throw new Error("Care Package message whisper cannot be sent: dune.accounts has no Funcom ID column for Server persona setup");
     await upsertDuneRow(db, "accounts", accountValues, "id");
   } else if (!encryptedColumns.has("encrypted_funcom_id")) {
-    throw new Error("Care Package welcome whisper cannot be sent: writable Server persona account table is unavailable");
+    throw new Error("Care Package message whisper cannot be sent: writable Server persona account table is unavailable");
   }
 
   const playerStateColumns = await tableColumns(db, "player_state");
@@ -623,8 +623,8 @@ async function resolveCarePackageServerPersona(db) {
   const row = result.rows?.[0] || {};
   const hexFlsId = String(row.hex_fls_id || "").trim();
   const funcomId = String(row.funcom_id || "").trim();
-  if (!/^[A-Fa-f0-9]{16,64}$/.test(hexFlsId)) throw new Error("Care Package welcome whisper cannot be sent: Server sender hex FLS ID was not resolved from the database");
-  if (!funcomId) throw new Error("Care Package welcome whisper cannot be sent: Server sender Funcom ID was not resolved from the database");
+  if (!/^[A-Fa-f0-9]{16,64}$/.test(hexFlsId)) throw new Error("Care Package message whisper cannot be sent: Server sender hex FLS ID was not resolved from the database");
+  if (!funcomId) throw new Error("Care Package message whisper cannot be sent: Server sender Funcom ID was not resolved from the database");
   return {
     ...CARE_PACKAGE_SERVER_PERSONA,
     hexFlsId,
@@ -673,7 +673,6 @@ function quoteIdentifier(value) {
 
 function validateGrantWhen(value) {
   const raw = String(value || "").trim();
-  if (raw === "first_seen") return "last_seen";
   if (["last_seen", "first_online"].includes(raw)) return raw;
   return DEFAULT_CONFIG.grantWhen;
 }
@@ -703,17 +702,17 @@ function validateNumber(value, name, min, max) {
 }
 
 function configPath(config) {
-  return resolve(config.generatedDir, "starter-kit.json");
+  return resolve(config.generatedDir, "care-package.json");
 }
 
 function grantsPath(config) {
-  return resolve(config.generatedDir, "starter-kit-grants.jsonl");
+  return resolve(config.generatedDir, "care-package-grants.jsonl");
 }
 
 function readConfig(config) {
   const file = configPath(config);
   if (!existsSync(file)) return DEFAULT_CONFIG;
-  return validateStarterKitConfig(JSON.parse(readFileSync(file, "utf8")));
+  return validateCarePackageConfig(JSON.parse(readFileSync(file, "utf8")));
 }
 
 function writeConfig(config, value) {

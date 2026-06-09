@@ -2,7 +2,7 @@
 
 ## With Arrakis Server Console
 
-This project packages the Dune Awakening Docker server stack together with **Arrakis Server Console**, a built-in browser admin panel for setup, operations, player tools, backups, logs, updates, and starter kits.
+This project packages the Dune Awakening Docker server stack together with **Arrakis Server Console**, a built-in browser admin panel for setup, operations, player tools, backups, logs, updates, and care packages.
 
 Arrakis Server Console helps server owners manage:
 
@@ -10,10 +10,9 @@ Arrakis Server Console helps server owners manage:
 - services and logs
 - backups and updates
 - players and admin actions
-- Starter Kits
+- Care Packages
 - maps, sietches, Deep Desert, memory, and autoscaler controls
 - read-only database tools
-- market read-only views
 - live map marker/list view
 
 This project is unofficial. It is not affiliated with, endorsed by, sponsored by, or supported by Funcom.
@@ -166,22 +165,20 @@ Same-LAN players connecting through the public address may need NAT reflection/h
 | Check/apply updates | Updates |
 | Manage players | Players |
 | Grant items, XP, water, teleport, kick, spawn vehicle | Players |
-| Configure and grant Starter Kits | Starter Kit |
+| Configure and grant Care Packages | Care Package |
 | Manage maps, sietches, Deep Desert, memory, autoscaler | Maps |
 | Browse database safely | Database |
 | View item/vehicle/skill catalogs and command history | Admin Tools |
 
-Advanced CLI usage still exists, but normal admins should start with Arrakis Server Console. See [Advanced CLI Notes](docs/advanced-cli.md).
+Advanced CLI usage still exists, but normal admins should start with Arrakis Server Console.
 
 ## Feature Status
 
 | Status | Features |
 |---|---|
-| Working | Home/status/readiness, Services/logs, Backups create/list, Updates check game/stack, Database read-only browser, Players/profile/inventory, Give Item, Give Item by ID, Add XP, Set Skill Points, Refill Water, Teleport, Kick Player, Spawn Vehicle, Starter Kit manual grant, Market read-only views, Admin catalog/history |
-| Partial / experimental | Broadcast publishes to RabbitMQ and logs history but does not appear in-game, Starter Kit auto-grant runs only while Arrakis Server Console is running, Live Map shows markers/list without a calibrated background map, progression/events/stats/history schema mappings are incomplete |
-| Blocked / not implemented | Market automation, Whisper, verified Shutdown Broadcast delivery, blueprint/base import/delete/clone, unsafe import/restore flows without explicit confirmation |
-
-For the full detailed matrix, see [Web Feature Parity Status](docs/web-feature-parity-status.md).
+| Working | Home/status/readiness, Services/logs, Backups create/list, Updates check game/stack, Database read-only browser, Players/profile/inventory, Give Item, Give Item by ID, Add XP, Set Skill Points, Give Water, Teleport, Kick Player, Spawn Vehicle, Care Package grants, Admin Tools actions/history |
+| Partial / experimental | Broadcast publishes to RabbitMQ and logs history but does not appear in-game, Care Package auto-grant runs only while Arrakis Server Console is running, Live Map shows markers/list without a calibrated background map, progression/events/stats/history schema mappings are incomplete |
+| Blocked / not implemented | Verified Shutdown Broadcast delivery, unsafe import/restore flows without explicit confirmation |
 
 ## Security Notes
 
@@ -232,17 +229,6 @@ Free space carefully. Do not delete runtime backups or generated state unless yo
 ```bash
 docker compose -f docker-compose.web.yml restart arrakis-console
 ```
-
-## Documentation
-
-- [Web Admin Deployment](docs/web-deployment.md)
-- [Web UI Guide](docs/web-ui.md)
-- [Web Admin Features](docs/web-admin-features.md)
-- [Web API](docs/web-api.md)
-- [Web Security](docs/web-security.md)
-- [Web Testing](docs/web-testing.md)
-- [Web Feature Parity Status](docs/web-feature-parity-status.md)
-- [Advanced CLI Notes](docs/advanced-cli.md)
 
 ## License
 

@@ -14,7 +14,7 @@ import { audit, recordAdminHistory } from "./audit.js";
 import { redact } from "./redact.js";
 import { listCatalogItems, resolveCatalogItem } from "./adminCatalog.js";
 import { buildBroadcastCommand, buildShutdownBroadcastCommand, publishServerCommand } from "./rmq.js";
-import { clearStarterKitHistory, enableStarterKit, grantEligibleStarterKits, grantStarterKit, retryStarterKitGrant, runStarterKitAutoScan, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitEligiblePlayers, starterKitHistory } from "./carePackage.js";
+import { clearCarePackageHistory, enableCarePackage, grantEligibleCarePackages, grantCarePackage, retryCarePackageGrant, runCarePackageAutoScan, saveCarePackageConfig, carePackageCapabilities, carePackageConfig, carePackageEligiblePlayers, carePackageHistory } from "./carePackage.js";
 import { readJsonBody, safeStaticTarget } from "./httpSafety.js";
 import { parseBackupAutoStatus, parseBackupListRows } from "./statusParsers.js";
 
@@ -22,8 +22,8 @@ const config = loadConfig();
 const auth = createAuth(config);
 const tasks = new TaskManager(config);
 let db = createDb(config);
-let starterKitAutoRunning = false;
-let starterKitAutoLastRun = 0;
+let carePackageAutoRunning = false;
+let carePackageAutoLastRun = 0;
 
 const mime = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -53,7 +53,7 @@ createServer(async (req, res) => {
 });
 
 setInterval(() => {
-  void starterKitAutoTick();
+  void carePackageAutoTick();
 }, 10000).unref?.();
 
 function scheduleBootAutoStart() {
@@ -275,18 +275,18 @@ async function handleApi(req, res) {
   if (path.match(/^\/api\/storage\/[^/]+\/items$/)) return dbJson(res, () => duneDb.storageItems(db, decodeURIComponent(path.split("/")[3])));
   if (path.match(/^\/api\/storage\/[^/]+\/give-item$/) && req.method === "POST") return storageGiveItemRoute(req, res, path);
   if (path.match(/^\/api\/storage\/[^/]+\/export$/)) return exportJson(res, `storage-${decodeURIComponent(path.split("/")[3])}.json`, () => duneDb.storageItems(db, decodeURIComponent(path.split("/")[3])));
-  if (path === "/api/starter-kit/capabilities") return json(res, 200, starterKitCapabilities());
-  if (path === "/api/starter-kit/config" && req.method === "POST") return starterKitConfigRoute(req, res);
-  if (path === "/api/starter-kit/config") return json(res, 200, starterKitConfig(config));
-  if (path === "/api/starter-kit/history/clear" && req.method === "POST") return starterKitClearHistoryRoute(req, res);
-  if (path === "/api/starter-kit/grants" || path === "/api/starter-kit/history") return json(res, 200, starterKitHistory(config, url.searchParams.get("limit") || 100));
-  if (path === "/api/starter-kit/eligible") return starterKitEligibleRoute(req, res);
-  if (path === "/api/starter-kit/grant-eligible" && req.method === "POST") return starterKitGrantEligibleRoute(req, res);
-  if (path === "/api/starter-kit/run" && req.method === "POST") return starterKitRunRoute(req, res);
-  if (path.match(/^\/api\/starter-kit\/grant\/[^/]+$/) && req.method === "POST") return starterKitGrantRoute(req, res, path);
-  if (path.match(/^\/api\/starter-kit\/retry\/[^/]+$/) && req.method === "POST") return starterKitRetryRoute(req, res, path);
-  if (path === "/api/starter-kit/enable" && req.method === "POST") return starterKitEnableRoute(req, res, true);
-  if (path === "/api/starter-kit/disable" && req.method === "POST") return starterKitEnableRoute(req, res, false);
+  if (path === "/api/care-package/capabilities") return json(res, 200, carePackageCapabilities());
+  if (path === "/api/care-package/config" && req.method === "POST") return carePackageConfigRoute(req, res);
+  if (path === "/api/care-package/config") return json(res, 200, carePackageConfig(config));
+  if (path === "/api/care-package/history/clear" && req.method === "POST") return carePackageClearHistoryRoute(req, res);
+  if (path === "/api/care-package/grants" || path === "/api/care-package/history") return json(res, 200, carePackageHistory(config, url.searchParams.get("limit") || 100));
+  if (path === "/api/care-package/eligible") return carePackageEligibleRoute(req, res);
+  if (path === "/api/care-package/grant-eligible" && req.method === "POST") return carePackageGrantEligibleRoute(req, res);
+  if (path === "/api/care-package/run" && req.method === "POST") return carePackageRunRoute(req, res);
+  if (path.match(/^\/api\/care-package\/grant\/[^/]+$/) && req.method === "POST") return carePackageGrantRoute(req, res, path);
+  if (path.match(/^\/api\/care-package\/retry\/[^/]+$/) && req.method === "POST") return carePackageRetryRoute(req, res, path);
+  if (path === "/api/care-package/enable" && req.method === "POST") return carePackageEnableRoute(req, res, true);
+  if (path === "/api/care-package/disable" && req.method === "POST") return carePackageEnableRoute(req, res, false);
 
   if (path === "/api/map/status") return mapStatusRoute(res);
   if (path === "/api/map/capabilities") return dbJson(res, () => duneDb.liveMapCapabilities(db));
@@ -1104,52 +1104,52 @@ async function playerTask(req, res, path, operation, phrase = "") {
   return task(req, res, "admin", operation, { ...body, playerId });
 }
 
-async function starterKitConfigRoute(req, res) {
+async function carePackageConfigRoute(req, res) {
   const body = await readJson(req);
-  if (body.confirmation !== "SAVE STARTER KIT") return json(res, 400, { error: "Confirmation phrase required: SAVE STARTER KIT" });
+  if (body.confirmation !== "SAVE CARE PACKAGE") return json(res, 400, { error: "Confirmation phrase required: SAVE CARE PACKAGE" });
   try {
-    const saved = saveStarterKitConfig(config, body);
-    audit(config, req, "starter-kit.config", { supported: true, enabled: saved.enabled, version: saved.version, itemCount: saved.items.length, xp: saved.xp });
+    const saved = saveCarePackageConfig(config, body);
+    audit(config, req, "care-package.config", { supported: true, enabled: saved.enabled, version: saved.version, itemCount: saved.items.length, xp: saved.xp });
     return json(res, 200, saved);
   } catch (error) {
-    audit(config, req, "starter-kit.config", { supported: false, error: redact(error.message || error) });
+    audit(config, req, "care-package.config", { supported: false, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error) });
   }
 }
 
-async function starterKitEnableRoute(req, res, enabled) {
+async function carePackageEnableRoute(req, res, enabled) {
   const body = await readJson(req);
-  const phrase = enabled ? "ENABLE STARTER KIT" : "DISABLE STARTER KIT";
+  const phrase = enabled ? "ENABLE CARE PACKAGE" : "DISABLE CARE PACKAGE";
   if (body.confirmation !== phrase) return json(res, 400, { error: `Confirmation phrase required: ${phrase}` });
   try {
-    const saved = enableStarterKit(config, enabled);
-    audit(config, req, enabled ? "starter-kit.enable" : "starter-kit.disable", { supported: true, version: saved.version });
+    const saved = enableCarePackage(config, enabled);
+    audit(config, req, enabled ? "care-package.enable" : "care-package.disable", { supported: true, version: saved.version });
     return json(res, 200, saved);
   } catch (error) {
     return json(res, 400, { error: redact(error.message || error) });
   }
 }
 
-async function starterKitGrantRoute(req, res, path) {
+async function carePackageGrantRoute(req, res, path) {
   const playerId = decodeURIComponent(path.split("/")[4]);
   try {
     const body = await readJson(req);
-    const identity = await resolveStarterKitPlayerIdentity(playerId).catch(() => ({}));
-    const result = await grantStarterKit(config, playerId, { ...body, ...identity }, { db });
-    audit(config, req, "starter-kit.grant", { supported: true, playerId, ok: result.ok, grantId: result.id });
+    const identity = await resolveCarePackagePlayerIdentity(playerId).catch(() => ({}));
+    const result = await grantCarePackage(config, playerId, { ...body, ...identity }, { db });
+    audit(config, req, "care-package.grant", { supported: true, playerId, ok: result.ok, grantId: result.id });
     return json(res, result.ok ? 200 : 207, result);
   } catch (error) {
-    audit(config, req, "starter-kit.grant", { supported: false, playerId, error: redact(error.message || error) });
+    audit(config, req, "care-package.grant", { supported: false, playerId, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error) });
   }
 }
 
-async function starterKitEligibleRoute(req, res) {
+async function carePackageEligibleRoute(req, res) {
   try {
     const params = new URL(req.url, "http://localhost").searchParams;
     const players = await duneDb.listPlayers(db, {});
     if (players.capabilities?.players === false) return json(res, 501, { supported: false, reason: players.reason || "Player list is unavailable" });
-    return json(res, 200, starterKitEligiblePlayers(config, players.rows || [], {
+    return json(res, 200, carePackageEligiblePlayers(config, players.rows || [], {
       ruleId: params.get("ruleId") || "",
       onlyEligible: params.get("onlyEligible") === "1"
     }));
@@ -1158,61 +1158,61 @@ async function starterKitEligibleRoute(req, res) {
   }
 }
 
-async function starterKitGrantEligibleRoute(req, res) {
+async function carePackageGrantEligibleRoute(req, res) {
   try {
     const players = await duneDb.listPlayers(db, {});
     if (players.capabilities?.players === false) return json(res, 501, { supported: false, reason: players.reason || "Player list is unavailable" });
-    const result = await grantEligibleStarterKits(config, players.rows || [], await readJson(req), { db });
-    audit(config, req, "starter-kit.grant-eligible", { supported: true, granted: result.granted, skipped: result.skipped, failed: result.failed });
+    const result = await grantEligibleCarePackages(config, players.rows || [], await readJson(req), { db });
+    audit(config, req, "care-package.grant-eligible", { supported: true, granted: result.granted, skipped: result.skipped, failed: result.failed });
     return json(res, result.failed ? 207 : 200, result);
   } catch (error) {
-    audit(config, req, "starter-kit.grant-eligible", { supported: false, error: redact(error.message || error) });
+    audit(config, req, "care-package.grant-eligible", { supported: false, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error), reason: redact(error.message || error) });
   }
 }
 
-async function starterKitRunRoute(req, res) {
+async function carePackageRunRoute(req, res) {
   const body = await readJson(req);
-  if (body.confirmation !== "RUN STARTER KIT SCAN") return json(res, 400, { error: "Confirmation phrase required: RUN STARTER KIT SCAN" });
+  if (body.confirmation !== "RUN CARE PACKAGE SCAN") return json(res, 400, { error: "Confirmation phrase required: RUN CARE PACKAGE SCAN" });
   try {
     const players = await duneDb.listPlayers(db, {});
     if (players.capabilities?.players === false) return json(res, 501, { supported: false, reason: players.reason || "Player list is unavailable" });
-    const result = await runStarterKitAutoScan(config, players.rows || [], "manual-scan", { db });
-    audit(config, req, "starter-kit.run", { supported: true, ...result, results: undefined });
+    const result = await runCarePackageAutoScan(config, players.rows || [], "manual-scan", { db });
+    audit(config, req, "care-package.run", { supported: true, ...result, results: undefined });
     return json(res, result.failed ? 207 : 200, result);
   } catch (error) {
-    audit(config, req, "starter-kit.run", { supported: false, error: redact(error.message || error) });
+    audit(config, req, "care-package.run", { supported: false, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error), reason: redact(error.message || error) });
   }
 }
 
-async function starterKitRetryRoute(req, res, path) {
+async function carePackageRetryRoute(req, res, path) {
   const grantId = decodeURIComponent(path.split("/")[4]);
   try {
-    const result = await retryStarterKitGrant(config, grantId, await readJson(req), { db });
-    audit(config, req, "starter-kit.retry", { supported: true, grantId, ok: result.ok, retryGrantId: result.id });
+    const result = await retryCarePackageGrant(config, grantId, await readJson(req), { db });
+    audit(config, req, "care-package.retry", { supported: true, grantId, ok: result.ok, retryGrantId: result.id });
     return json(res, result.ok ? 200 : 207, result);
   } catch (error) {
-    audit(config, req, "starter-kit.retry", { supported: false, grantId, error: redact(error.message || error) });
+    audit(config, req, "care-package.retry", { supported: false, grantId, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error) });
   }
 }
 
-async function starterKitClearHistoryRoute(req, res) {
+async function carePackageClearHistoryRoute(req, res) {
   const body = await readJson(req);
   const phrase = "CLEAR GRANT HISTORY";
   if (body.confirmation !== phrase) return json(res, 400, { error: `Confirmation phrase required: ${phrase}` });
   try {
-    const result = clearStarterKitHistory(config);
-    audit(config, req, "starter-kit.history-clear", { supported: true, removed: result.removed });
+    const result = clearCarePackageHistory(config);
+    audit(config, req, "care-package.history-clear", { supported: true, removed: result.removed });
     return json(res, 200, result);
   } catch (error) {
-    audit(config, req, "starter-kit.history-clear", { supported: false, error: redact(error.message || error) });
+    audit(config, req, "care-package.history-clear", { supported: false, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error) });
   }
 }
 
-async function resolveStarterKitPlayerIdentity(playerId) {
+async function resolveCarePackagePlayerIdentity(playerId) {
   const players = await duneDb.listPlayers(db, {});
   const rows = players.rows || [];
   const target = String(playerId || "").toLowerCase();
@@ -1430,34 +1430,34 @@ async function setupState() {
   };
 }
 
-async function starterKitAutoTick() {
-  if (starterKitAutoRunning) return;
+async function carePackageAutoTick() {
+  if (carePackageAutoRunning) return;
   let kit;
   try {
-    kit = starterKitConfig(config);
+    kit = carePackageConfig(config);
   } catch (error) {
-    console.error(`Starter Kit auto-grant config read failed: ${redact(error.message || error)}`);
+    console.error(`Care Package auto-grant config read failed: ${redact(error.message || error)}`);
     return;
   }
   if (!kit.enabled || !kit.autoGrantEnabled) return;
   const intervalMs = Math.max(60, Number(kit.autoGrantIntervalSeconds) || 60) * 1000;
-  if (Date.now() - starterKitAutoLastRun < intervalMs) return;
-  starterKitAutoRunning = true;
-  starterKitAutoLastRun = Date.now();
+  if (Date.now() - carePackageAutoLastRun < intervalMs) return;
+  carePackageAutoRunning = true;
+  carePackageAutoLastRun = Date.now();
   try {
     const players = await duneDb.listPlayers(db, {});
     if (players.capabilities?.players === false) return;
-    const result = await runStarterKitAutoScan(config, players.rows || [], "auto", { db });
+    const result = await runCarePackageAutoScan(config, players.rows || [], "auto", { db });
     if (result.granted || result.failed) {
-      console.log(`Starter Kit auto-grant scan: granted=${result.granted || 0} skipped=${result.skipped || 0} failed=${result.failed || 0}`);
+      console.log(`Care Package auto-grant scan: granted=${result.granted || 0} skipped=${result.skipped || 0} failed=${result.failed || 0}`);
     }
     if (result.granted || result.skipped || result.failed) {
-      audit(config, null, "starter-kit.auto-scan", { supported: true, granted: result.granted || 0, skipped: result.skipped || 0, failed: result.failed || 0 });
+      audit(config, null, "care-package.auto-scan", { supported: true, granted: result.granted || 0, skipped: result.skipped || 0, failed: result.failed || 0 });
     }
   } catch (error) {
-    console.error(`Starter Kit auto-grant scan failed: ${redact(error.message || error)}`);
+    console.error(`Care Package auto-grant scan failed: ${redact(error.message || error)}`);
   } finally {
-    starterKitAutoRunning = false;
+    carePackageAutoRunning = false;
   }
 }
 

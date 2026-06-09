@@ -12,8 +12,8 @@ import { mapsApi, type LiveMapMemoryRow, type UserSettingField, type UserSetting
 import { updatesApi } from "./api/updates";
 import { worldDataApi } from "./api/worldData";
 import { adminApi } from "./api/admin";
-import { starterKitApi, type StarterKitConfig, type StarterKitEntry } from "./api/carePackage";
-import type { StarterKitAutoGrantRule } from "./api/carePackage";
+import { carePackageApi, type CarePackageConfig, type CarePackageEntry } from "./api/carePackage";
+import type { CarePackageAutoGrantRule } from "./api/carePackage";
 import { setupApi, type Task } from "./api/setup";
 import { liveMapApi, type LiveMapConfig, type LiveMapMarker, type LiveMapPartition } from "./api/liveMap";
 import { SetupWizard } from "./components/SetupWizard";
@@ -234,7 +234,7 @@ export function App() {
         {tab === "Admin Tools" && <AdminToolsPanel onError={setError} />}
         {tab === "Live Map" && <LiveMapPanel onError={setError} />}
         {tab === "Maps" && <MapsPanel setTask={setTask} onError={setError} />}
-        {tab === "Care Package" && <StarterKitPanel onError={setError} />}
+        {tab === "Care Package" && <CarePackagePanel onError={setError} />}
         {tab === "Addons" && <AddonsPanel />}
         {tab === "Database" && <DatabasePanel />}
         {tab === "Storage" && <StoragePanel onError={setError} />}
@@ -1441,7 +1441,7 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
           <button disabled={!selectedItem} onClick={() => setMultiList([...multiList, { itemName, itemId, quantity: Number(quantity), durability: Number(durability) }])}>Add Selected Item</button>
           <button disabled={!multiList.length} onClick={() => setMultiList([])}>Clear List</button>
         </div>
-        {multiList.length ? <div className="table-wrap starter-items-table"><table><thead><tr><th>Item Name</th><th>Item ID</th><th>Quantity</th><th>Durability</th><th>Actions</th></tr></thead><tbody>{multiList.map((item, index) => <tr key={`${item.itemName || item.itemId}-${index}`}><td>{starterItemName(item)}</td><td>{starterItemId(item)}</td><td>{item.quantity}</td><td>{item.durability}</td><td><button className="danger" onClick={() => setMultiList(multiList.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></td></tr>)}</tbody></table></div> : <div className="empty">No multi-item entries yet. Search/select an item, set quantity, then Add Selected Item.</div>}
+        {multiList.length ? <div className="table-wrap package-items-table"><table><thead><tr><th>Item Name</th><th>Item ID</th><th>Quantity</th><th>Durability</th><th>Actions</th></tr></thead><tbody>{multiList.map((item, index) => <tr key={`${item.itemName || item.itemId}-${index}`}><td>{catalogItemName(item)}</td><td>{catalogItemId(item)}</td><td>{item.quantity}</td><td>{item.durability}</td><td><button className="danger" onClick={() => setMultiList(multiList.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></td></tr>)}</tbody></table></div> : <div className="empty">No multi-item entries yet. Search/select an item, set quantity, then Add Selected Item.</div>}
         <details className="technical-details"><summary>Developer raw multi-item textarea</summary><label>Multiple Items<textarea value={multiItems} onChange={(event) => setMultiItems(event.target.value)} placeholder="One item per line: name or raw id, quantity, durability" rows={4} /></label></details>
         <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { const items = parsedMultiItems(); if (window.confirm(`Give ${items.length} item entries to player ${actionPlayerId}?`)) await runDirect(() => playersApi.giveItems(actionPlayerId, items)); })}>Give Multiple Items</button>
       </section>
@@ -2411,41 +2411,41 @@ function parseEditableDbValue(value: string, original: unknown) {
   return text;
 }
 
-function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
-  const [config, setConfig] = useState<StarterKitConfig>({
+function CarePackagePanel({ onError }: { onError: (text: string) => void }) {
+  const [config, setConfig] = useState<CarePackageConfig>({
     enabled: false,
-    version: "starter-kit-v1",
-    activeKitId: "starter-kit-v1",
-    autoGrantKitId: "starter-kit-v1",
-    kits: [{ id: "starter-kit-v1", name: "Care Package", items: [], xp: 0, welcomeMessage: "" }],
+    version: "care-package-v1",
+    activeKitId: "care-package-v1",
+    autoGrantKitId: "care-package-v1",
+    kits: [{ id: "care-package-v1", name: "Care Package", items: [], xp: 0, sendMessage: "" }],
     items: [],
     xp: 0,
     allowRepeatGrants: false,
     autoGrantEnabled: false,
     autoGrantIntervalSeconds: 60,
     grantWhen: "first_online",
-    autoGrantRules: [{ id: "auto-rule-1", enabled: true, kitId: "starter-kit-v1", grantWhen: "first_online", lastSeenDays: 30 }]
+    autoGrantRules: [{ id: "auto-rule-1", enabled: true, kitId: "care-package-v1", grantWhen: "first_online", lastSeenDays: 30 }]
   });
   const [itemsText, setItemsText] = useState("");
-  const [selectedStarterItem, setSelectedStarterItem] = useState<CatalogItem | null>(null);
-  const [starterDraft, setStarterDraft] = useState({ itemName: "", itemId: "", quantity: "1", durability: "1" });
-  const [editingStarterIndex, setEditingStarterIndex] = useState<number | null>(null);
-  const [starterEditDraft, setStarterEditDraft] = useState({ quantity: "1", durability: "1" });
+  const [selectedPackageItem, setSelectedPackageItem] = useState<CatalogItem | null>(null);
+  const [packageDraft, setPackageDraft] = useState({ itemName: "", itemId: "", quantity: "1", durability: "1" });
+  const [editingPackageIndex, setEditingPackageIndex] = useState<number | null>(null);
+  const [packageEditDraft, setPackageEditDraft] = useState({ quantity: "1", durability: "1" });
   const [players, setPlayers] = useState<Record<string, unknown>[]>([]);
   const [selectedPlayer, setSelectedPlayer] = useState("");
   const [manualPlayerId, setManualPlayerId] = useState("");
-  const [manualKitId, setManualKitId] = useState("starter-kit-v1");
+  const [manualKitId, setManualKitId] = useState("care-package-v1");
   const [eligibleByRule, setEligibleByRule] = useState<Record<string, Record<string, unknown>[]>>({});
   const [history, setHistory] = useState<Record<string, unknown>[]>([]);
-  const [starterGrantTab, setStarterGrantTab] = useState<"auto" | "manual">("auto");
-  const [starterKitTab, setStarterKitTab] = useState<"create" | "configure">("configure");
-  const [starterItemsOpen, setStarterItemsOpen] = useState(false);
+  const [carePackageGrantTab, setCarePackageGrantTab] = useState<"auto" | "manual">("auto");
+  const [carePackageTab, setCarePackageTab] = useState<"create" | "configure">("configure");
+  const [packageItemsOpen, setPackageItemsOpen] = useState(false);
   const [kitSaveResult, setKitSaveResult] = useState<HomeTaskResult | null>(null);
   const [packageCreateResult, setPackageCreateResult] = useState<HomeTaskResult | null>(null);
   const [autoGrantResult, setAutoGrantResult] = useState<HomeTaskResult | null>(null);
   const [manualGrantResult, setManualGrantResult] = useState<HomeTaskResult | null>(null);
   const [newKitName, setNewKitName] = useState("");
-  const [newAutoRule, setNewAutoRule] = useState<{ kitId: string; grantWhen: StarterKitAutoGrantRule["grantWhen"]; lastSeenDays: number }>({ kitId: "starter-kit-v1", grantWhen: "first_online", lastSeenDays: 30 });
+  const [newAutoRule, setNewAutoRule] = useState<{ kitId: string; grantWhen: CarePackageAutoGrantRule["grantWhen"]; lastSeenDays: number }>({ kitId: "care-package-v1", grantWhen: "first_online", lastSeenDays: 30 });
   const [expandedRuleIds, setExpandedRuleIds] = useState<Record<string, boolean>>({});
   const [output, setOutput] = useState("");
   const [technicalOutput, setTechnicalOutput] = useState("");
@@ -2458,16 +2458,16 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
     try { await action(); } catch (error) { const text = error instanceof Error ? error.message : String(error); setOutput(text); onError(text); }
   }
   async function load() {
-    const next = await starterKitApi.config();
-    const normalized = normalizeStarterKitConfig(next);
+    const next = await carePackageApi.config();
+    const normalized = normalizeCarePackageConfig(next);
     const lastKit = normalized.kits.at(-1);
     const displayConfig = lastKit ? { ...normalized, activeKitId: lastKit.id, version: lastKit.id, items: lastKit.items, xp: lastKit.xp } : normalized;
     setConfig(displayConfig);
-    setStarterKitTab(lastKit ? "configure" : "create");
+    setCarePackageTab(lastKit ? "configure" : "create");
     setNewAutoRule({ kitId: lastKit?.id || normalized.autoGrantKitId || normalized.activeKitId, grantWhen: normalized.grantWhen, lastSeenDays: 30 });
     setManualKitId(lastKit?.id || normalized.activeKitId || "");
     setItemsText((lastKit?.items || normalized.items || []).map((item) => `${item.itemId || item.itemName || ""},${item.quantity},${item.durability}`).join("\n"));
-    setHistory((await starterKitApi.history()).rows || []);
+    setHistory((await carePackageApi.history()).rows || []);
     setPlayers((await playersApi.list()).rows || []);
   }
   useEffect(() => {
@@ -2497,8 +2497,8 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [output, outputScope]);
-  function nextConfig(source = config): StarterKitConfig {
-    const sourceActiveKit = starterKitActiveKit(source);
+  function nextConfig(source = config): CarePackageConfig {
+    const sourceActiveKit = carePackageActiveKit(source);
     return {
       ...source,
       allowRepeatGrants: false,
@@ -2512,13 +2512,13 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
       kits: source.kits
     };
   }
-  async function saveStarterConfigDraft(draft: StarterKitConfig, successTitle: string, resultTarget: "package" | "auto" | "create" | "setup" = "package") {
+  async function saveCarePackageConfigDraft(draft: CarePackageConfig, successTitle: string, resultTarget: "package" | "auto" | "create" | "setup" = "package") {
     const setResult = resultTarget === "auto" ? setAutoGrantResult : resultTarget === "create" || resultTarget === "setup" ? setPackageCreateResult : setKitSaveResult;
     setResult({ status: "running", title: resultTarget === "auto" ? "Saving Auto Grant..." : resultTarget === "create" ? "Creating Package..." : "Saving Package..." });
     try {
-      const saved = normalizeStarterKitConfig(await starterKitApi.saveConfig(nextConfig(draft), "SAVE STARTER KIT"));
+      const saved = normalizeCarePackageConfig(await carePackageApi.saveConfig(nextConfig(draft), "SAVE CARE PACKAGE"));
       setConfig(saved);
-      const savedActiveKit = starterKitActiveKit(saved);
+      const savedActiveKit = carePackageActiveKit(saved);
       setNewAutoRule((current) => ({
         kitId: saved.kits.some((kit) => kit.id === current.kitId) ? current.kitId : saved.autoGrantKitId || savedActiveKit.id,
         grantWhen: current.grantWhen,
@@ -2526,11 +2526,11 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
       }));
       setManualKitId((current) => saved.kits.some((kit) => kit.id === current) ? current : savedActiveKit.id);
       setItemsText(savedActiveKit.items.map((item) => `${item.itemId || item.itemName || ""},${item.quantity},${item.durability}`).join("\n"));
-      if (!saved.kits.length) setStarterKitTab("create");
+      if (!saved.kits.length) setCarePackageTab("create");
       setResult({ status: "succeeded", title: successTitle });
       return saved;
     } catch (error) {
-      setResult({ status: "failed", title: resultTarget === "auto" ? "Auto Grant Save Failed." : resultTarget === "create" ? "Package Create Failed." : "Package Save Failed.", message: formatStarterKitError(error instanceof Error ? error.message : String(error)) });
+      setResult({ status: "failed", title: resultTarget === "auto" ? "Auto Grant Save Failed." : resultTarget === "create" ? "Package Create Failed." : "Package Save Failed.", message: formatCarePackageError(error instanceof Error ? error.message : String(error)) });
       throw error;
     }
   }
@@ -2540,30 +2540,30 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
     setConfig({ ...config, activeKitId: nextKit.id, version: nextKit.id, items: nextKit.items, xp: nextKit.xp });
     setManualKitId(nextKit.id);
     setItemsText(nextKit.items.map((entry) => `${entry.itemId || entry.itemName || ""},${entry.quantity},${entry.durability}`).join("\n"));
-    setEditingStarterIndex(null);
+    setEditingPackageIndex(null);
   }
-  function updateActiveKit(patch: Partial<StarterKitEntry>) {
+  function updateActiveKit(patch: Partial<CarePackageEntry>) {
     const nextKits = config.kits.map((kit) => kit.id === activeKit.id ? { ...kit, ...patch } : kit);
     const nextActive = nextKits.find((kit) => kit.id === activeKit.id) || nextKits[0];
     setConfig({ ...config, kits: nextKits, activeKitId: nextActive.id, version: nextActive.id, items: nextActive.items, xp: nextActive.xp });
   }
-  function addStarterKit() {
+  function addCarePackage() {
     const name = newKitName.trim();
     if (!name) {
       setPackageCreateResult({ status: "failed", title: "Package Create Failed.", message: "Package name is required." });
       return;
     }
     const nextIndex = config.kits.length + 1;
-    const id = uniqueStarterKitId(config.kits, name || `starter-kit-${nextIndex}`);
-    const nextKit = { id, name, items: [], xp: 0, welcomeMessage: "" };
+    const id = uniqueCarePackageId(config.kits, name || `care-package-${nextIndex}`);
+    const nextKit = { id, name, items: [], xp: 0, sendMessage: "" };
     const draft = { ...config, kits: [...config.kits, nextKit], activeKitId: id, version: id, items: [], xp: 0 };
     run(async () => {
-      await saveStarterConfigDraft(draft, "Package was created.", "create");
+      await saveCarePackageConfigDraft(draft, "Package was created.", "create");
       setNewKitName("");
-      setStarterKitTab("configure");
-      setEditingStarterIndex(null);
-      setSelectedStarterItem(null);
-      setStarterDraft({ itemName: "", itemId: "", quantity: "1", durability: "1" });
+      setCarePackageTab("configure");
+      setEditingPackageIndex(null);
+      setSelectedPackageItem(null);
+      setPackageDraft({ itemName: "", itemId: "", quantity: "1", durability: "1" });
     });
   }
   function deleteActiveKit() {
@@ -2587,27 +2587,27 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
       autoGrantRules
     };
     run(async () => {
-      await saveStarterConfigDraft(draft, "Package was deleted.", "setup");
-      setEditingStarterIndex(null);
+      await saveCarePackageConfigDraft(draft, "Package was deleted.", "setup");
+      setEditingPackageIndex(null);
       setEligibleByRule({});
-      if (!nextKits.length) setStarterKitTab("create");
+      if (!nextKits.length) setCarePackageTab("create");
     });
   }
   function addAutoGrantRule() {
     const kitId = config.kits.some((kit) => kit.id === newAutoRule.kitId) ? newAutoRule.kitId : activeKit.id;
-    const id = uniqueStarterRuleId(config.autoGrantRules, `auto-rule-${config.autoGrantRules.length + 1}`);
+    const id = uniquePackageRuleId(config.autoGrantRules, `auto-rule-${config.autoGrantRules.length + 1}`);
     const draft = { ...config, autoGrantEnabled: true, autoGrantRules: [...config.autoGrantRules, { id, enabled: false, kitId, grantWhen: newAutoRule.grantWhen, lastSeenDays: newAutoRule.lastSeenDays }] };
-    run(async () => { await saveStarterConfigDraft(draft, "Auto grant rule was created.", "auto"); });
+    run(async () => { await saveCarePackageConfigDraft(draft, "Auto grant rule was created.", "auto"); });
   }
-  function updateAutoGrantRule(id: string, patch: Partial<StarterKitAutoGrantRule>) {
+  function updateAutoGrantRule(id: string, patch: Partial<CarePackageAutoGrantRule>) {
     const currentRule = config.autoGrantRules.find((rule) => rule.id === id);
     const nextEnabled = typeof patch.enabled === "boolean" ? patch.enabled : currentRule?.enabled;
     const resultTitle = typeof patch.enabled === "boolean"
-      ? `${starterKitRuleName(currentRule, config.kits)} was ${patch.enabled ? "enabled" : "disabled"}.`
+      ? `${carePackageRuleName(currentRule, config.kits)} was ${patch.enabled ? "enabled" : "disabled"}.`
       : "Auto grant rule was saved.";
     const draft = { ...config, autoGrantEnabled: patch.enabled === true ? true : config.autoGrantEnabled, autoGrantRules: config.autoGrantRules.map((rule) => rule.id === id ? { ...rule, ...patch } : rule) };
     run(async () => {
-      await saveStarterConfigDraft(draft, resultTitle, "auto");
+      await saveCarePackageConfigDraft(draft, resultTitle, "auto");
       if (typeof nextEnabled === "boolean") setAutoGrantResult({ status: nextEnabled ? "succeeded" : "failed", title: resultTitle });
     });
   }
@@ -2615,7 +2615,7 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
     if (!window.confirm("Delete this Auto Grant rule?")) return;
     const draft = { ...config, autoGrantRules: config.autoGrantRules.filter((rule) => rule.id !== id) };
     run(async () => {
-      await saveStarterConfigDraft(draft, "Auto grant rule was deleted.", "auto");
+      await saveCarePackageConfigDraft(draft, "Auto grant rule was deleted.", "auto");
       setEligibleByRule((current) => {
         const { [id]: _removed, ...rest } = current;
         void _removed;
@@ -2633,116 +2633,116 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
     setExpandedRuleIds({ ...expandedRuleIds, [ruleId]: nextOpen });
     if (!nextOpen) return;
     run(async () => {
-      const result = await starterKitApi.eligible(ruleId, true);
+      const result = await carePackageApi.eligible(ruleId, true);
       setEligibleByRule((current) => ({ ...current, [ruleId]: result.rows || [] }));
     });
   }
-  function chooseStarterItem(item: CatalogItem | null) {
-    setSelectedStarterItem(item);
-    setStarterDraft({ ...starterDraft, itemName: item?.name || "", itemId: item?.id || "" });
+  function choosePackageItem(item: CatalogItem | null) {
+    setSelectedPackageItem(item);
+    setPackageDraft({ ...packageDraft, itemName: item?.name || "", itemId: item?.id || "" });
   }
-  function addStarterItem() {
-    const item = starterDraft.itemId ? { itemId: starterDraft.itemId, itemName: starterDraft.itemName, image: selectedStarterItem?.image } : { itemName: starterDraft.itemName, image: selectedStarterItem?.image };
-    if (!starterDraft.itemName && !starterDraft.itemId) return;
-    const nextItems = [...(activeKit.items || []), { ...item, quantity: Number(starterDraft.quantity), durability: Number(starterDraft.durability) }];
+  function addPackageItem() {
+    const item = packageDraft.itemId ? { itemId: packageDraft.itemId, itemName: packageDraft.itemName, image: selectedPackageItem?.image } : { itemName: packageDraft.itemName, image: selectedPackageItem?.image };
+    if (!packageDraft.itemName && !packageDraft.itemId) return;
+    const nextItems = [...(activeKit.items || []), { ...item, quantity: Number(packageDraft.quantity), durability: Number(packageDraft.durability) }];
     updateActiveKit({ items: nextItems });
     setItemsText(nextItems.map((entry) => `${entry.itemId || entry.itemName || ""},${entry.quantity},${entry.durability}`).join("\n"));
   }
-  function editStarterItem(index: number) {
+  function editPackageItem(index: number) {
     const item = activeKit.items?.[index];
     if (!item) return;
-    setEditingStarterIndex(index);
-    setStarterEditDraft({ quantity: String(item.quantity ?? 1), durability: String(item.durability ?? 1) });
+    setEditingPackageIndex(index);
+    setPackageEditDraft({ quantity: String(item.quantity ?? 1), durability: String(item.durability ?? 1) });
   }
-  function saveStarterItemEdit(index: number) {
-    const nextItems = (activeKit.items || []).map((item, itemIndex) => itemIndex === index ? { ...item, quantity: Number(starterEditDraft.quantity), durability: Number(starterEditDraft.durability) } : item);
+  function savePackageItemEdit(index: number) {
+    const nextItems = (activeKit.items || []).map((item, itemIndex) => itemIndex === index ? { ...item, quantity: Number(packageEditDraft.quantity), durability: Number(packageEditDraft.durability) } : item);
     updateActiveKit({ items: nextItems });
     setItemsText(nextItems.map((entry) => `${entry.itemId || entry.itemName || ""},${entry.quantity},${entry.durability}`).join("\n"));
-    setEditingStarterIndex(null);
+    setEditingPackageIndex(null);
   }
-  const activeKit = starterKitActiveKit(config);
+  const activeKit = carePackageActiveKit(config);
   const manualKit = config.kits.find((kit) => kit.id === manualKitId) || activeKit;
-  const starterItemCount = activeKit.items?.length || 0;
+  const packageItemCount = activeKit.items?.length || 0;
   const selected = players.find((player) => String(player.actor_id || player.player_pawn_id || "") === selectedPlayer) || null;
   const grantPlayerId = manualPlayerId.trim() || String(selected?.action_player_id || "");
   const selectedLabel = selected ? `${selected.character_name || "Unknown"} (${selected.online_status || "unknown"}) - actor ${selected.actor_id || "-"} - admin ${selected.action_player_id || "-"}` : "";
   const manualGrantTargetName = String(selected?.character_name || grantPlayerId || "selected player");
-  const historyRows = starterKitHistoryRows(history).filter((row) => String(row.status || "").toLowerCase() !== "skipped").slice(0, 10);
+  const historyRows = carePackageHistoryRows(history).filter((row) => String(row.status || "").toLowerCase() !== "skipped").slice(0, 10);
   return <section className="panel">
     <div className="panel-title"><h2>Care Package</h2></div>
     <div className="action-sections">
       <section className="action-section">
         <div className="panel-title">
           <h4>Care Package Configuration</h4>
-          <button className={`starter-kit-toggle ${config.enabled ? "enabled" : "disabled"}`} onClick={() => run(async () => {
-            const confirmation = config.enabled ? "DISABLE STARTER KIT" : "ENABLE STARTER KIT";
+          <button className={`care-package-toggle ${config.enabled ? "enabled" : "disabled"}`} onClick={() => run(async () => {
+            const confirmation = config.enabled ? "DISABLE CARE PACKAGE" : "ENABLE CARE PACKAGE";
             const message = config.enabled ? "Disable Care Package?" : "Enable Care Package?";
-            if (window.confirm(message)) setConfig(normalizeStarterKitConfig(await starterKitApi[config.enabled ? "disable" : "enable"](confirmation)));
+            if (window.confirm(message)) setConfig(normalizeCarePackageConfig(await carePackageApi[config.enabled ? "disable" : "enable"](confirmation)));
           })}>Care Package: {config.enabled ? "On" : "Off"}</button>
         </div>
         <div className="settings-tabs" role="tablist" aria-label="Care Package setup">
-          <button className={starterKitTab === "create" ? "active" : ""} role="tab" aria-selected={starterKitTab === "create"} onClick={() => setStarterKitTab("create")}>Create</button>
-          <button className={starterKitTab === "configure" ? "active" : ""} role="tab" aria-selected={starterKitTab === "configure"} disabled={!config.kits.length} onClick={() => setStarterKitTab("configure")}>Configure</button>
+          <button className={carePackageTab === "create" ? "active" : ""} role="tab" aria-selected={carePackageTab === "create"} onClick={() => setCarePackageTab("create")}>Create</button>
+          <button className={carePackageTab === "configure" ? "active" : ""} role="tab" aria-selected={carePackageTab === "configure"} disabled={!config.kits.length} onClick={() => setCarePackageTab("configure")}>Configure</button>
           {packageCreateResult && <span className={`inline-task-result result-${packageCreateResult.status === "succeeded" ? "ok" : packageCreateResult.status === "failed" ? "fail" : "running"}`}>
             <strong className={packageCreateResult.status === "running" ? "loading-dots" : ""}>{packageCreateResult.title}</strong>
             {packageCreateResult.message && <span className="inline-task-message">{packageCreateResult.message}</span>}
           </span>}
         </div>
-        {starterKitTab === "create" ? <div className="starter-kit-builder starter-kit-create">
-          <label className="starter-kit-new-field">New Package Name<input value={newKitName} onChange={(event) => setNewKitName(event.target.value)} placeholder="New package" /></label>
-          <button onClick={addStarterKit}>Add Package</button>
+        {carePackageTab === "create" ? <div className="care-package-builder care-package-create">
+          <label className="care-package-new-field">New Package Name<input value={newKitName} onChange={(event) => setNewKitName(event.target.value)} placeholder="New package" /></label>
+          <button onClick={addCarePackage}>Add Package</button>
         </div> : <>
-        <div className="starter-kit-builder">
+        <div className="care-package-builder">
           <label className="compact-select">Select Package<select value={activeKit.id} onChange={(event) => setActiveKitId(event.target.value)}>{config.kits.map((kit) => <option key={kit.id} value={kit.id}>{kit.name || "Name Required"}</option>)}</select></label>
           <button className="danger" onClick={deleteActiveKit}>Delete Package</button>
         </div>
-        <label className="starter-kit-name-field">Package Name<input value={activeKit.name} onChange={(event) => updateActiveKit({ name: event.target.value })} placeholder="Enter package name" /></label>
-        <div className="starter-xp-row">
+        <label className="care-package-name-field">Package Name<input value={activeKit.name} onChange={(event) => updateActiveKit({ name: event.target.value })} placeholder="Enter package name" /></label>
+        <div className="package-xp-row">
           <span>Grant</span>
           <input type="number" min="0" value={String(activeKit.xp)} onChange={(event) => updateActiveKit({ xp: Number(event.target.value) })} />
           <span>XP</span>
         </div>
-        <label className="starter-welcome-field">Send Message<textarea value={activeKit.welcomeMessage || ""} onChange={(event) => updateActiveKit({ welcomeMessage: event.target.value })} placeholder="Optional private whisper after this package is granted" /></label>
-        <div className={`starter-items-toggle-panel ${starterItemsOpen ? "open" : ""}`}>
-          <div className="starter-items-toggle-row">
-            <h4>Starter Items</h4>
-            <button className={`icon-toggle-button ${starterItemsOpen ? "active" : ""}`} aria-label={starterItemsOpen ? "Collapse Starter Items" : "Expand Starter Items"} title={starterItemsOpen ? "Collapse" : "Expand"} onClick={() => setStarterItemsOpen(!starterItemsOpen)}>{starterItemsOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>
+        <label className="package-message-field">Send Message<textarea value={activeKit.sendMessage || ""} onChange={(event) => updateActiveKit({ sendMessage: event.target.value })} placeholder="Optional private whisper after this package is granted" /></label>
+        <div className={`package-items-toggle-panel ${packageItemsOpen ? "open" : ""}`}>
+          <div className="package-items-toggle-row">
+            <h4>Package Items</h4>
+            <button className={`icon-toggle-button ${packageItemsOpen ? "active" : ""}`} aria-label={packageItemsOpen ? "Collapse Package Items" : "Expand Package Items"} title={packageItemsOpen ? "Collapse" : "Expand"} onClick={() => setPackageItemsOpen(!packageItemsOpen)}>{packageItemsOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>
           </div>
-          {starterItemsOpen && <div className="starter-items-picker-panel">
-            <ItemCatalogSelector selected={selectedStarterItem} onSelect={chooseStarterItem} />
+          {packageItemsOpen && <div className="package-items-picker-panel">
+            <ItemCatalogSelector selected={selectedPackageItem} onSelect={choosePackageItem} />
             <div className="action-line">
-              <label>Quantity<input type="number" min="1" value={starterDraft.quantity} onChange={(event) => setStarterDraft({ ...starterDraft, quantity: event.target.value })} /></label>
-              <label>Durability / Quality<input type="number" min="0" value={starterDraft.durability} onChange={(event) => setStarterDraft({ ...starterDraft, durability: event.target.value })} /></label>
-              <button disabled={!selectedStarterItem} onClick={addStarterItem}>Add Item</button>
+              <label>Quantity<input type="number" min="1" value={packageDraft.quantity} onChange={(event) => setPackageDraft({ ...packageDraft, quantity: event.target.value })} /></label>
+              <label>Durability / Quality<input type="number" min="0" value={packageDraft.durability} onChange={(event) => setPackageDraft({ ...packageDraft, durability: event.target.value })} /></label>
+              <button disabled={!selectedPackageItem} onClick={addPackageItem}>Add Item</button>
             </div>
           </div>}
         </div>
-        {activeKit.items?.length ? <div className="table-wrap starter-items-table"><table><thead><tr><th>Preview</th><th>Item Name</th><th>Item ID</th><th>Quantity</th><th>Durability</th><th>Actions</th></tr></thead><tbody>{activeKit.items.map((item, index) => {
-          const editing = editingStarterIndex === index;
-          return <tr key={`${item.itemName || item.itemId}-${index}`}><td><StarterItemPreview item={item} /></td><td>{starterItemName(item)}</td><td>{starterItemId(item)}</td><td>{editing ? <input className="starter-item-quantity-input" type="number" min="1" value={starterEditDraft.quantity} onChange={(event) => setStarterEditDraft({ ...starterEditDraft, quantity: event.target.value })} /> : item.quantity}</td><td>{editing ? <input className="starter-item-durability-input" type="number" min="0" value={starterEditDraft.durability} onChange={(event) => setStarterEditDraft({ ...starterEditDraft, durability: event.target.value })} /> : item.durability}</td><td className="starter-actions-cell"><div className="service-actions">{editing ? <><button onClick={() => saveStarterItemEdit(index)}>Save</button><button onClick={() => setEditingStarterIndex(null)}>Cancel</button></> : <button onClick={() => editStarterItem(index)}>Edit</button>}<button className="danger" onClick={() => {
+        {activeKit.items?.length ? <div className="table-wrap package-items-table"><table><thead><tr><th>Preview</th><th>Item Name</th><th>Item ID</th><th>Quantity</th><th>Durability</th><th>Actions</th></tr></thead><tbody>{activeKit.items.map((item, index) => {
+          const editing = editingPackageIndex === index;
+          return <tr key={`${item.itemName || item.itemId}-${index}`}><td><PackageItemPreview item={item} /></td><td>{catalogItemName(item)}</td><td>{catalogItemId(item)}</td><td>{editing ? <input className="package-item-quantity-input" type="number" min="1" value={packageEditDraft.quantity} onChange={(event) => setPackageEditDraft({ ...packageEditDraft, quantity: event.target.value })} /> : item.quantity}</td><td>{editing ? <input className="package-item-durability-input" type="number" min="0" value={packageEditDraft.durability} onChange={(event) => setPackageEditDraft({ ...packageEditDraft, durability: event.target.value })} /> : item.durability}</td><td className="package-actions-cell"><div className="service-actions">{editing ? <><button onClick={() => savePackageItemEdit(index)}>Save</button><button onClick={() => setEditingPackageIndex(null)}>Cancel</button></> : <button onClick={() => editPackageItem(index)}>Edit</button>}<button className="danger" onClick={() => {
           const nextItems = activeKit.items.filter((_, itemIndex) => itemIndex !== index);
           updateActiveKit({ items: nextItems });
           setItemsText(nextItems.map((entry) => `${entry.itemId || entry.itemName || ""},${entry.quantity},${entry.durability}`).join("\n"));
-          if (editingStarterIndex === index) setEditingStarterIndex(null);
+          if (editingPackageIndex === index) setEditingPackageIndex(null);
         }}>Remove</button></div></td></tr>;
         })}</tbody></table></div> : null}
-        <details className="technical-details"><summary>Developer raw starter item textarea</summary><p>One item per line: item name or raw item ID, quantity, durability.</p><label>Starter Items<textarea value={itemsText} onChange={(event) => setItemsText(event.target.value)} placeholder="Plant Fiber,10,1&#10;cup of water,1,1" /></label></details>
+        <details className="technical-details"><summary>Developer raw package item textarea</summary><p>One item per line: item name or raw item ID, quantity, durability.</p><label>Package Items<textarea value={itemsText} onChange={(event) => setItemsText(event.target.value)} placeholder="Plant Fiber,10,1&#10;cup of water,1,1" /></label></details>
         <div className="action-line">
           <button onClick={() => run(async () => {
             if (!window.confirm("Save Care Package?")) return;
-            if (selectedStarterItem && !activeKit.items.some((item) => (item.itemId && item.itemId === starterDraft.itemId) || (item.itemName && item.itemName === starterDraft.itemName))) {
+            if (selectedPackageItem && !activeKit.items.some((item) => (item.itemId && item.itemId === packageDraft.itemId) || (item.itemName && item.itemName === packageDraft.itemName))) {
               setKitSaveResult({ status: "failed", title: "Package Save Failed.", message: "Click Add Item before saving the package." });
               return;
             }
             setKitSaveResult({ status: "running", title: "Saving Package..." });
             try {
-              const saved = normalizeStarterKitConfig(await starterKitApi.saveConfig(nextConfig(), "SAVE STARTER KIT"));
+              const saved = normalizeCarePackageConfig(await carePackageApi.saveConfig(nextConfig(), "SAVE CARE PACKAGE"));
               setConfig(saved);
-              const savedActiveKit = starterKitActiveKit(saved);
+              const savedActiveKit = carePackageActiveKit(saved);
               setItemsText(savedActiveKit.items.map((item) => `${item.itemId || item.itemName || ""},${item.quantity},${item.durability}`).join("\n"));
               setKitSaveResult({ status: "succeeded", title: "Package was saved successfully." });
             } catch (error) {
-              setKitSaveResult({ status: "failed", title: "Package Save Failed.", message: formatStarterKitError(error instanceof Error ? error.message : String(error)) });
+              setKitSaveResult({ status: "failed", title: "Package Save Failed.", message: formatCarePackageError(error instanceof Error ? error.message : String(error)) });
             }
           })}>Save Package</button>
           {kitSaveResult && <span className={`inline-task-result result-${kitSaveResult.status === "succeeded" ? "ok" : kitSaveResult.status === "failed" ? "fail" : "running"}`}>
@@ -2754,10 +2754,10 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
       </section>
 
       <section className="action-section">
-        <div className="starter-grant-header">
+        <div className="care-package-grant-header">
           <div className="settings-tabs" role="tablist" aria-label="Care Package grants">
-            <button className={starterGrantTab === "auto" ? "active" : ""} role="tab" aria-selected={starterGrantTab === "auto"} onClick={() => setStarterGrantTab("auto")}>Auto Grant</button>
-            <button className={starterGrantTab === "manual" ? "active" : ""} role="tab" aria-selected={starterGrantTab === "manual"} onClick={() => setStarterGrantTab("manual")}>Manual Grant</button>
+            <button className={carePackageGrantTab === "auto" ? "active" : ""} role="tab" aria-selected={carePackageGrantTab === "auto"} onClick={() => setCarePackageGrantTab("auto")}>Auto Grant</button>
+            <button className={carePackageGrantTab === "manual" ? "active" : ""} role="tab" aria-selected={carePackageGrantTab === "manual"} onClick={() => setCarePackageGrantTab("manual")}>Manual Grant</button>
             {manualGrantResult && <span className="inline-task-result result-running">
               <strong className="loading-dots">{manualGrantResult.title}</strong>
             </span>}
@@ -2767,26 +2767,26 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
             {autoGrantResult.message && <span className="inline-task-message">{autoGrantResult.message}</span>}
           </span>}
         </div>
-        {starterGrantTab === "auto" ? <>
-          <div className="action-line starter-auto-line">
+        {carePackageGrantTab === "auto" ? <>
+          <div className="action-line package-auto-line">
             <label className="compact-field">Interval Seconds<input type="number" min="60" max="3600" value={String(config.autoGrantIntervalSeconds)} onChange={(event) => setConfig({ ...config, autoGrantIntervalSeconds: Number(event.target.value) })} /></label>
             <label className="compact-select">Package<select value={newAutoRule.kitId} onChange={(event) => setNewAutoRule({ ...newAutoRule, kitId: event.target.value })}>{config.kits.map((kit) => <option key={kit.id} value={kit.id}>{kit.name || "Name Required"}</option>)}</select></label>
-            <label className="compact-select">Grant When<select value={newAutoRule.grantWhen} onChange={(event) => setNewAutoRule({ ...newAutoRule, grantWhen: event.target.value as StarterKitAutoGrantRule["grantWhen"] })}><option value="first_online">First Online</option><option value="last_seen">Last Seen</option></select></label>
+            <label className="compact-select">Grant When<select value={newAutoRule.grantWhen} onChange={(event) => setNewAutoRule({ ...newAutoRule, grantWhen: event.target.value as CarePackageAutoGrantRule["grantWhen"] })}><option value="first_online">First Online</option><option value="last_seen">Last Seen</option></select></label>
             {newAutoRule.grantWhen === "last_seen" && <label className="compact-field">Days Ago<input type="number" min="1" max="3650" value={String(newAutoRule.lastSeenDays)} onChange={(event) => setNewAutoRule({ ...newAutoRule, lastSeenDays: Number(event.target.value) })} /></label>}
             <button disabled={!config.kits.length} onClick={addAutoGrantRule}>Create Rule</button>
           </div>
-          <div className="starter-auto-rules">
+          <div className="package-auto-rules">
             {config.autoGrantRules.map((rule) => {
               const kit = config.kits.find((entry) => entry.id === rule.kitId);
               const ruleEligible = eligibleByRule[rule.id] || [];
               const expanded = Boolean(expandedRuleIds[rule.id]);
               const showEligibility = rule.grantWhen === "last_seen";
-              return <article className="starter-auto-rule" key={rule.id}>
-                <button className={`starter-rule-toggle ${rule.enabled ? "enabled" : "disabled"}`} onClick={() => updateAutoGrantRule(rule.id, { enabled: !rule.enabled })}>{rule.enabled ? "Enabled" : "Disabled"}</button>
-                <span className="starter-rule-summary">Grants {starterKitGrantSummary(kit)} based on {starterKitConditionLabel(rule)}</span>
-            <button className="icon-toggle-button danger starter-rule-delete" aria-label="Delete Auto Grant rule" title="Delete" onClick={() => deleteAutoGrantRule(rule.id)}><X size={18} /></button>
+              return <article className="package-auto-rule" key={rule.id}>
+                <button className={`package-rule-toggle ${rule.enabled ? "enabled" : "disabled"}`} onClick={() => updateAutoGrantRule(rule.id, { enabled: !rule.enabled })}>{rule.enabled ? "Enabled" : "Disabled"}</button>
+                <span className="package-rule-summary">Grants {carePackageGrantSummary(kit)} based on {carePackageConditionLabel(rule)}</span>
+            <button className="icon-toggle-button danger package-rule-delete" aria-label="Delete Auto Grant rule" title="Delete" onClick={() => deleteAutoGrantRule(rule.id)}><X size={18} /></button>
                 {showEligibility && <button className={`icon-toggle-button ${expanded ? "active" : ""}`} aria-label={expanded ? "Collapse Eligibility" : "Expand Eligibility"} title={expanded ? "Collapse" : "Expand"} onClick={() => toggleRuleEligible(rule.id)}>{expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>}
-                {showEligibility && expanded && <div className="starter-rule-eligible"><h5>Eligibility</h5>{ruleEligible.length ? <DataTable rows={starterKitEligibleRows(ruleEligible)} /> : <div className="empty starter-history-empty">No eligible players for this rule right now.</div>}</div>}
+                {showEligibility && expanded && <div className="package-rule-eligible"><h5>Eligibility</h5>{ruleEligible.length ? <DataTable rows={carePackageEligibleRows(ruleEligible)} /> : <div className="empty package-history-empty">No eligible players for this rule right now.</div>}</div>}
               </article>;
             })}
           </div>
@@ -2803,12 +2803,12 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
               if (!window.confirm(`Grant ${manualKit.name} to ${selectedLabel || grantPlayerId}?`)) return;
               setManualGrantResult({ status: "running", title: `Granting ${manualKit.name || "package"} to ${manualGrantTargetName}...` });
               try {
-                showGrantResult("grant", await starterKitApi.grant(grantPlayerId, "GRANT STARTER KIT", manualKit.id));
-                setHistory((await starterKitApi.history()).rows || []);
+                showGrantResult("grant", await carePackageApi.grant(grantPlayerId, "GRANT CARE PACKAGE", manualKit.id));
+                setHistory((await carePackageApi.history()).rows || []);
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 setOutputScope("grant");
-                setOutput(`FAIL: ${formatStarterKitError(message)}`);
+                setOutput(`FAIL: ${formatCarePackageError(message)}`);
                 setTechnicalOutput(message);
               } finally {
                 setManualGrantResult(null);
@@ -2820,7 +2820,7 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
             <summary>Advanced manual player ID override</summary>
             <label>Admin action ID<input value={manualPlayerId} onChange={(event) => setManualPlayerId(event.target.value)} placeholder="RedBlink#75570" /></label>
           </details>
-          <StarterKitResult output={outputScope === "grant" ? output : ""} technicalOutput={outputScope === "grant" ? technicalOutput : ""} />
+          <CarePackageResult output={outputScope === "grant" ? output : ""} technicalOutput={outputScope === "grant" ? technicalOutput : ""} />
         </>}
       </section>
 
@@ -2829,32 +2829,32 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
           <h4>Grant History</h4>
           <button disabled={!historyRows.length} onClick={() => run(async () => {
             if (!window.confirm("Clear Care Package grant history?")) return;
-            await starterKitApi.clearHistory();
+            await carePackageApi.clearHistory();
             setHistory([]);
             setOutputScope("history");
             setOutput("");
             setTechnicalOutput("");
           })}>Clear</button>
         </div>
-        <StarterKitResult output={outputScope === "history" ? output : ""} technicalOutput={outputScope === "history" ? technicalOutput : ""} />
-        <div className="starter-history-table">
+        <CarePackageResult output={outputScope === "history" ? output : ""} technicalOutput={outputScope === "history" ? technicalOutput : ""} />
+        <div className="package-history-table">
           {historyRows.length ? <DataTable rows={historyRows} columns={["timestamp", "character_name", "action_player_id", "source", "status", "summary"]} action={(row) => String(row.status || "").toLowerCase() === "failed" ? <button onClick={() => run(async () => {
             if (!window.confirm(`Retry Care Package grant ${row.id}?`)) return;
-            showGrantResult("history", await starterKitApi.retry(String(row.id), "RETRY STARTER KIT"));
-            setHistory((await starterKitApi.history()).rows || []);
-          })}>Retry</button> : null} /> : <div className="empty starter-history-empty">No Care Package grants have been recorded yet.</div>}
+            showGrantResult("history", await carePackageApi.retry(String(row.id), "RETRY CARE PACKAGE"));
+            setHistory((await carePackageApi.history()).rows || []);
+          })}>Retry</button> : null} /> : <div className="empty package-history-empty">No Care Package grants have been recorded yet.</div>}
         </div>
       </section>
     </div>
     <details className="technical-details">
       <summary>Raw Care Package JSON</summary>
-      <pre className="mini-output">{JSON.stringify(displayStarterKitConfig(config), null, 2)}</pre>
+      <pre className="mini-output">{JSON.stringify(displayCarePackageConfig(config), null, 2)}</pre>
     </details>
   </section>;
 
   function showGrantResult(scope: "grant" | "auto" | "history", result: Record<string, unknown>) {
     setOutputScope(scope);
-    setOutput(formatStarterKitGrantResult(result));
+    setOutput(formatCarePackageGrantResult(result));
     setTechnicalOutput(JSON.stringify(result, null, 2));
   }
 }
@@ -2869,55 +2869,55 @@ function AddonsPanel() {
   </section>;
 }
 
-function normalizeStarterKitConfig(config: StarterKitConfig): StarterKitConfig {
-  const fallbackKit: StarterKitEntry = { id: config.version || "starter-kit-v1", name: "Care Package", items: config.items || [], xp: Number(config.xp) || 0, welcomeMessage: "" };
+function normalizeCarePackageConfig(config: CarePackageConfig): CarePackageConfig {
+  const fallbackKit: CarePackageEntry = { id: config.version || "care-package-v1", name: "Care Package", items: config.items || [], xp: Number(config.xp) || 0, sendMessage: "" };
   const kits = (Array.isArray(config.kits) ? config.kits : [fallbackKit]).map((kit, index) => ({
-    id: kit.id || `starter-kit-${index + 1}`,
+    id: kit.id || `care-package-${index + 1}`,
     name: typeof kit.name === "string" ? kit.name : (index === 0 ? "Care Package" : `Care Package ${index + 1}`),
     items: kit.items || [],
     xp: Number(kit.xp) || 0,
-    welcomeMessage: normalizeCarePackageWelcomeMessage(kit.welcomeMessage)
+    sendMessage: normalizeCarePackageSendMessage(kit.sendMessage)
   }));
   const activeKitId = kits.some((kit) => kit.id === config.activeKitId) ? config.activeKitId : kits[0]?.id || "";
   const autoGrantKitId = kits.some((kit) => kit.id === config.autoGrantKitId) ? config.autoGrantKitId : activeKitId;
-  const activeKit = kits.find((kit) => kit.id === activeKitId) || kits[0] || { id: "", name: "", items: [], xp: 0, welcomeMessage: "" };
+  const activeKit = kits.find((kit) => kit.id === activeKitId) || kits[0] || { id: "", name: "", items: [], xp: 0, sendMessage: "" };
   const autoGrantRules = (kits.length ? (Array.isArray(config.autoGrantRules) ? config.autoGrantRules : [{ id: "auto-rule-1", enabled: true, kitId: autoGrantKitId, grantWhen: "first_online" as const, lastSeenDays: 30 }]) : []).map((rule, index) => ({
     id: rule.id || `auto-rule-${index + 1}`,
     enabled: rule.enabled !== false,
     kitId: kits.some((kit) => kit.id === rule.kitId) ? rule.kitId : autoGrantKitId,
-    grantWhen: rule.grantWhen === "last_seen" || String(rule.grantWhen) === "first_seen" ? "last_seen" as const : "first_online" as const,
+    grantWhen: rule.grantWhen === "last_seen" ? "last_seen" as const : "first_online" as const,
     lastSeenDays: Number(rule.lastSeenDays) || 30
   }));
-  const grantWhen = config.grantWhen === "last_seen" || String(config.grantWhen) === "first_seen" ? "last_seen" : "first_online";
+  const grantWhen = config.grantWhen === "last_seen" ? "last_seen" : "first_online";
   return { ...config, version: activeKit.id, activeKitId, autoGrantKitId, kits, items: activeKit.items, xp: activeKit.xp, allowRepeatGrants: false, grantWhen, autoGrantRules };
 }
 
-function normalizeCarePackageWelcomeMessage(value: unknown) {
+function normalizeCarePackageSendMessage(value: unknown) {
   const text = typeof value === "string" ? value : "";
   return text.trim() === "Welcome to the server" ? "" : text;
 }
 
-function displayStarterKitConfig(config: StarterKitConfig) {
+function displayCarePackageConfig(config: CarePackageConfig) {
   const { version, allowRepeatGrants, ...visible } = config;
   void version;
   void allowRepeatGrants;
   return visible;
 }
 
-function formatStarterKitError(value: string) {
+function formatCarePackageError(value: string) {
   const text = String(value || "").trim()
-    .replaceAll("Starter Kit", "Care Package")
-    .replaceAll("starter kit", "care package")
+    .replaceAll("Care Package", "Care Package")
+    .replaceAll("care package", "care package")
     .replaceAll(" kit", " package")
     .replaceAll(" Kit", " Package");
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Care Package save failed.";
 }
 
-function starterKitActiveKit(config: StarterKitConfig) {
+function carePackageActiveKit(config: CarePackageConfig) {
   return config.kits.find((kit) => kit.id === config.activeKitId) || config.kits[0] || { id: "", name: "", items: [], xp: 0 };
 }
 
-function starterKitGrantSummary(kit?: StarterKitEntry) {
+function carePackageGrantSummary(kit?: CarePackageEntry) {
   if (!kit) return "Unknown Package";
   const parts = [];
   if (kit.xp) parts.push(`${kit.xp} XP`);
@@ -2925,18 +2925,18 @@ function starterKitGrantSummary(kit?: StarterKitEntry) {
   return `${kit.name || "Name Required"}${parts.length ? ` (${parts.join(", ")})` : ""}`;
 }
 
-function starterKitRuleName(rule: StarterKitAutoGrantRule | undefined, kits: StarterKitEntry[]) {
+function carePackageRuleName(rule: CarePackageAutoGrantRule | undefined, kits: CarePackageEntry[]) {
   const kit = kits.find((entry) => entry.id === rule?.kitId);
   return kit?.name ? `${kit.name} rule` : "Auto Grant rule";
 }
 
-function starterKitConditionLabel(rule: StarterKitAutoGrantRule) {
+function carePackageConditionLabel(rule: CarePackageAutoGrantRule) {
   if (rule.grantWhen === "last_seen") return `Last Seen ${Number(rule.lastSeenDays) || 30} Days Ago`;
   return "First Online";
 }
 
-function uniqueStarterKitId(kits: StarterKitEntry[], base: string) {
-  const normalized = base.toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "") || "starter-kit";
+function uniqueCarePackageId(kits: CarePackageEntry[], base: string) {
+  const normalized = base.toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "") || "care-package";
   let id = normalized;
   let index = 2;
   while (kits.some((kit) => kit.id === id)) {
@@ -2946,7 +2946,7 @@ function uniqueStarterKitId(kits: StarterKitEntry[], base: string) {
   return id;
 }
 
-function uniqueStarterRuleId(rules: StarterKitAutoGrantRule[], base: string) {
+function uniquePackageRuleId(rules: CarePackageAutoGrantRule[], base: string) {
   const normalized = base.toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "") || "auto-rule";
   let id = normalized;
   let index = 2;
@@ -2957,7 +2957,7 @@ function uniqueStarterRuleId(rules: StarterKitAutoGrantRule[], base: string) {
   return id;
 }
 
-function starterKitEligibleRows(rows: Record<string, unknown>[]) {
+function carePackageEligibleRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => ({
     character_name: row.character_name || "Unknown",
     online_status: row.online_status || "",
@@ -2968,7 +2968,7 @@ function starterKitEligibleRows(rows: Record<string, unknown>[]) {
   }));
 }
 
-function starterKitHistoryRows(rows: Record<string, unknown>[]) {
+function carePackageHistoryRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => ({
     ...row,
     timestamp: String(row.local_timestamp || row.timestamp || ""),
@@ -2979,22 +2979,22 @@ function starterKitHistoryRows(rows: Record<string, unknown>[]) {
   }));
 }
 
-function StarterKitResult({ output, technicalOutput }: { output: string; technicalOutput: string }) {
+function CarePackageResult({ output, technicalOutput }: { output: string; technicalOutput: string }) {
   if (!output) return null;
   const rows = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  return <div className="result-panel starter-result">
+  return <div className="result-panel care-package-result">
     <strong>Care Package Result</strong>
     <ul className="result-list">
       {rows.map((line, index) => {
         const status = /^OK:/i.test(line) ? "ok" : /^FAIL:/i.test(line) || /failed/i.test(line) ? "fail" : "info";
-        return <li className={`result-row result-${status}`} key={`${line}-${index}`}>{friendlyStarterKitResultLine(line)}</li>;
+        return <li className={`result-row result-${status}`} key={`${line}-${index}`}>{friendlyCarePackageResultLine(line)}</li>;
       })}
     </ul>
     {technicalOutput && <TechnicalDetails text={technicalOutput} />}
   </div>;
 }
 
-function friendlyStarterKitResultLine(line: string) {
+function friendlyCarePackageResultLine(line: string) {
   return line
     .replace(/^OK:\s*/i, "Granted ")
     .replace(/^FAIL:\s*/i, "Failed ")
@@ -3073,7 +3073,7 @@ function CatalogItemThumb({ item, large = false, small = false }: { item: Catalo
   </div>;
 }
 
-function formatStarterKitGrantResult(result: Record<string, unknown>) {
+function formatCarePackageGrantResult(result: Record<string, unknown>) {
   if (Array.isArray(result.results) && result.results.some((row) => row && typeof row === "object" && "status" in row)) {
     const rows = result.results as Record<string, unknown>[];
     const lines = [
@@ -3089,8 +3089,8 @@ function formatStarterKitGrantResult(result: Record<string, unknown>) {
   const lines: string[] = [];
   if (Array.isArray(result.results)) {
     for (const action of result.results as Record<string, unknown>[]) {
-      if (action.ok) lines.push(`OK: ${describeStarterKitAction(action)}`);
-      else lines.push(`FAIL: to grant ${describeStarterKitAction(action)}`);
+      if (action.ok) lines.push(`OK: ${describeCarePackageAction(action)}`);
+      else lines.push(`FAIL: to grant ${describeCarePackageAction(action)}`);
     }
   }
   if (!lines.length) {
@@ -3100,25 +3100,25 @@ function formatStarterKitGrantResult(result: Record<string, unknown>) {
   return lines.join("\n");
 }
 
-function describeStarterKitAction(action: Record<string, unknown>) {
+function describeCarePackageAction(action: Record<string, unknown>) {
   const item = action.item as Record<string, unknown> | undefined;
   if (item) return `${item.itemName || item.itemId || "Item"} x${item.quantity || 1}`;
   if (action.operation === "adminAddXp") return `${action.amount || 0} XP`;
   return String(action.operation || "Care Package action");
 }
 
-function starterItemName(item: { itemName?: string; itemId?: string }) {
+function catalogItemName(item: { itemName?: string; itemId?: string }) {
   if (item.itemName) return item.itemName;
   if (item.itemId) return friendlyCatalogName(item.itemId);
   return "Unknown";
 }
 
-function StarterItemPreview({ item }: { item: { itemId?: string; image?: string } }) {
+function PackageItemPreview({ item }: { item: { itemId?: string; image?: string } }) {
   const catalogItem = { id: item.itemId || "", name: item.itemId || "Item", image: item.image } as CatalogItem;
   return <CatalogItemThumb item={catalogItem} small />;
 }
 
-function starterItemId(item: { itemId?: string }) {
+function catalogItemId(item: { itemId?: string }) {
   return item.itemId || "Resolved on grant";
 }
 

@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { clearStarterKitHistory, enableStarterKit, grantEligibleStarterKits, grantStarterKit, runStarterKitAutoScan, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitEligiblePlayers, starterKitHistory, validateStarterKitConfig } from "../src/carePackage.js";
+import { clearCarePackageHistory, enableCarePackage, grantEligibleCarePackages, grantCarePackage, runCarePackageAutoScan, saveCarePackageConfig, carePackageCapabilities, carePackageConfig, carePackageEligiblePlayers, carePackageHistory, validateCarePackageConfig } from "../src/carePackage.js";
 
-test("starter kit is disabled by default and reports manual capability", () => {
+test("care package is disabled by default and reports manual capability", () => {
   const config = tempConfig();
   try {
-    assert.equal(starterKitConfig(config).enabled, false);
-    const caps = starterKitCapabilities();
+    assert.equal(carePackageConfig(config).enabled, false);
+    const caps = carePackageCapabilities();
     assert.equal(caps.manualGrant, true);
     assert.equal(caps.bulkGrant, true);
     assert.equal(caps.automaticScanner, true);
@@ -18,46 +18,45 @@ test("starter kit is disabled by default and reports manual capability", () => {
   }
 });
 
-test("starter kit config validation rejects unsafe items and bounds", () => {
-  assert.deepEqual(validateStarterKitConfig({
+test("care package config validation rejects unsafe items and bounds", () => {
+  assert.deepEqual(validateCarePackageConfig({
     enabled: false,
-    version: "starter-kit-v1",
+    version: "care-package-v1",
     items: [{ itemName: "Water", quantity: 2, durability: 1 }],
     xp: 100
   }).items[0], { itemName: "Water", itemId: "", quantity: 2, durability: 1 });
-  assert.equal(validateStarterKitConfig({ autoGrantEnabled: true, autoGrantIntervalSeconds: 60, grantWhen: "first_online" }).grantWhen, "first_online");
-  assert.equal(validateStarterKitConfig({ version: "bad version with spaces" }).version, "starter-kit-v1");
-  assert.throws(() => validateStarterKitConfig({ items: [{ itemName: "Bad\nName" }] }), /Invalid Care Package item name/);
-  assert.throws(() => validateStarterKitConfig({ xp: -1 }), /xp/);
-  assert.throws(() => validateStarterKitConfig({ autoGrantIntervalSeconds: 59 }), /autoGrantIntervalSeconds/);
-  assert.equal(validateStarterKitConfig({ grantWhen: "always" }).grantWhen, "first_online");
-  assert.equal(validateStarterKitConfig({ grantWhen: "first_seen" }).grantWhen, "last_seen");
-  assert.equal(validateStarterKitConfig({ grantWhen: "last_seen" }).grantWhen, "last_seen");
+  assert.equal(validateCarePackageConfig({ autoGrantEnabled: true, autoGrantIntervalSeconds: 60, grantWhen: "first_online" }).grantWhen, "first_online");
+  assert.equal(validateCarePackageConfig({ version: "bad version with spaces" }).version, "care-package-v1");
+  assert.throws(() => validateCarePackageConfig({ items: [{ itemName: "Bad\nName" }] }), /Invalid Care Package item name/);
+  assert.throws(() => validateCarePackageConfig({ xp: -1 }), /xp/);
+  assert.throws(() => validateCarePackageConfig({ autoGrantIntervalSeconds: 59 }), /autoGrantIntervalSeconds/);
+  assert.equal(validateCarePackageConfig({ grantWhen: "always" }).grantWhen, "first_online");
+  assert.equal(validateCarePackageConfig({ grantWhen: "last_seen" }).grantWhen, "last_seen");
 });
 
-test("starter kit config writes and enable disable stay file-backed", () => {
+test("care package config writes and enable disable stay file-backed", () => {
   const config = tempConfig();
   try {
-    const saved = saveStarterKitConfig(config, {
+    const saved = saveCarePackageConfig(config, {
       enabled: false,
-      version: "starter-kit-v2",
+      version: "care-package-v2",
       items: [{ itemId: "WaterBottle_1", quantity: 1, durability: 1 }],
       xp: 10
     });
-    assert.equal(saved.version, "starter-kit-v2");
+    assert.equal(saved.version, "care-package-v2");
     assert.equal(saved.kits[0].name, "Care Package");
-    assert.equal(starterKitConfig(config).items[0].itemId, "WaterBottle_1");
-    assert.equal(enableStarterKit(config, true).enabled, true);
-    assert.equal(enableStarterKit(config, false).enabled, false);
+    assert.equal(carePackageConfig(config).items[0].itemId, "WaterBottle_1");
+    assert.equal(enableCarePackage(config, true).enabled, true);
+    assert.equal(enableCarePackage(config, false).enabled, false);
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
 });
 
-test("starter kit config can persist zero kits", () => {
+test("care package config can persist zero kits", () => {
   const config = tempConfig();
   try {
-    const saved = saveStarterKitConfig(config, {
+    const saved = saveCarePackageConfig(config, {
       enabled: false,
       activeKitId: "",
       autoGrantKitId: "",
@@ -66,16 +65,16 @@ test("starter kit config can persist zero kits", () => {
     });
     assert.deepEqual(saved.kits, []);
     assert.deepEqual(saved.autoGrantRules, []);
-    assert.equal(starterKitConfig(config).kits.length, 0);
+    assert.equal(carePackageConfig(config).kits.length, 0);
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
 });
 
-test("starter kit config can persist zero auto grant rules", () => {
+test("care package config can persist zero auto grant rules", () => {
   const config = tempConfig();
   try {
-    const saved = saveStarterKitConfig(config, {
+    const saved = saveCarePackageConfig(config, {
       enabled: true,
       activeKitId: "package-a",
       autoGrantKitId: "package-a",
@@ -83,19 +82,19 @@ test("starter kit config can persist zero auto grant rules", () => {
       autoGrantRules: []
     });
     assert.deepEqual(saved.autoGrantRules, []);
-    assert.equal(starterKitConfig(config).autoGrantRules.length, 0);
+    assert.equal(carePackageConfig(config).autoGrantRules.length, 0);
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
 });
 
-test("starter kit eligibility skips missing action ids, offline players, and already granted players", async () => {
+test("care package eligibility skips missing action ids, offline players, and already granted players", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [] });
-    const granted = await grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT" });
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [] });
+    const granted = await grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE" });
     assert.equal(granted.status, "granted");
-    const result = starterKitEligiblePlayers(config, [
+    const result = carePackageEligiblePlayers(config, [
       { actor_id: 82, character_name: "RedBlink", action_player_id: "RedBlink#75570", online_status: "Online" },
       { actor_id: 83, character_name: "NoId", action_player_id: "", online_status: "Online" },
       { actor_id: 84, character_name: "New", action_player_id: "New#1", online_status: "Offline" }
@@ -110,42 +109,42 @@ test("starter kit eligibility skips missing action ids, offline players, and alr
   }
 });
 
-test("starter kit manual repeat grants are allowed while automatic repeats stay blocked", async () => {
+test("care package manual repeat grants are allowed while automatic repeats stay blocked", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [], allowRepeatGrants: false });
-    await grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT" });
-    const repeat = await grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT" });
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [], allowRepeatGrants: false });
+    await grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE" });
+    const repeat = await grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE" });
     assert.equal(repeat.status, "granted");
-    await assert.rejects(() => grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT", source: "auto" }), /already granted/);
+    await assert.rejects(() => grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE", source: "auto" }), /already granted/);
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
 });
 
-test("starter kit eligibility is character-aware for new characters on the same account", async () => {
+test("care package eligibility is character-aware for new characters on the same account", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [] });
-    await grantStarterKit(config, "Account#1", { confirmation: "GRANT STARTER KIT", source: "auto", actorId: 101, characterName: "Existing" });
-    const result = starterKitEligiblePlayers(config, [
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [] });
+    await grantCarePackage(config, "Account#1", { confirmation: "GRANT CARE PACKAGE", source: "auto", actorId: 101, characterName: "Existing" });
+    const result = carePackageEligiblePlayers(config, [
       { actor_id: 101, character_name: "Existing", action_player_id: "Account#1", online_status: "Online" },
       { actor_id: 102, character_name: "New Character", action_player_id: "Account#1", online_status: "Online" }
     ]);
     assert.equal(result.rows.find((row) => row.character_name === "Existing").eligible, false);
     assert.equal(result.rows.find((row) => row.character_name === "New Character").eligible, true);
-    await assert.rejects(() => grantStarterKit(config, "Account#1", { confirmation: "GRANT STARTER KIT", source: "auto", actorId: 101, characterName: "Existing" }), /already granted/);
-    const nextCharacterGrant = await grantStarterKit(config, "Account#1", { confirmation: "GRANT STARTER KIT", source: "auto", actorId: 102, characterName: "New Character" });
+    await assert.rejects(() => grantCarePackage(config, "Account#1", { confirmation: "GRANT CARE PACKAGE", source: "auto", actorId: 101, characterName: "Existing" }), /already granted/);
+    const nextCharacterGrant = await grantCarePackage(config, "Account#1", { confirmation: "GRANT CARE PACKAGE", source: "auto", actorId: 102, characterName: "New Character" });
     assert.equal(nextCharacterGrant.status, "granted");
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
 });
 
-test("starter kit supports separate manual and auto-grant kit selection", async () => {
+test("care package supports separate manual and auto-grant kit selection", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
       activeKitId: "manual-kit",
       autoGrantKitId: "auto-kit",
@@ -155,10 +154,10 @@ test("starter kit supports separate manual and auto-grant kit selection", async 
         { id: "auto-kit", name: "Auto Kit", xp: 25, items: [] }
       ]
     });
-    const manual = await grantStarterKit(config, "Manual#1", { confirmation: "GRANT STARTER KIT", kitId: "manual-kit" });
+    const manual = await grantCarePackage(config, "Manual#1", { confirmation: "GRANT CARE PACKAGE", kitId: "manual-kit" });
     assert.equal(manual.kitName, "Manual Kit");
     assert.equal(manual.version, "manual-kit");
-    const auto = await runStarterKitAutoScan(config, [{ actor_id: 1, character_name: "Auto", action_player_id: "Auto#1", online_status: "Online" }]);
+    const auto = await runCarePackageAutoScan(config, [{ actor_id: 1, character_name: "Auto", action_player_id: "Auto#1", online_status: "Online" }]);
     assert.equal(auto.granted, 1);
     assert.equal(auto.results[0].kitName, "Auto Kit");
     assert.equal(auto.results[0].version, "auto-kit");
@@ -167,10 +166,10 @@ test("starter kit supports separate manual and auto-grant kit selection", async 
   }
 });
 
-test("starter kit auto scan supports multiple enabled rules with different conditions", async () => {
+test("care package auto scan supports multiple enabled rules with different conditions", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
       activeKitId: "online-kit",
       autoGrantKitId: "online-kit",
@@ -184,7 +183,7 @@ test("starter kit auto scan supports multiple enabled rules with different condi
         { id: "last-seen-rule", enabled: true, kitId: "detected-kit", grantWhen: "last_seen", lastSeenDays: 30 }
       ]
     });
-    const result = await runStarterKitAutoScan(config, [
+    const result = await runCarePackageAutoScan(config, [
       { actor_id: 1, character_name: "Online", action_player_id: "Online#1", online_status: "Online", last_seen: "2026-01-01T00:00:00.000Z" },
       { actor_id: 2, character_name: "Offline", action_player_id: "Offline#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" }
     ]);
@@ -198,7 +197,7 @@ test("starter kit auto scan supports multiple enabled rules with different condi
 test("last seen eligibility preview includes stale offline players but auto scan waits for online", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
       autoGrantEnabled: true,
       kits: [{ id: "back-again", name: "Back Again", xp: 25, items: [] }],
@@ -207,9 +206,9 @@ test("last seen eligibility preview includes stale offline players but auto scan
       autoGrantRules: [{ id: "last-seen-rule", enabled: true, kitId: "back-again", grantWhen: "last_seen", lastSeenDays: 30 }]
     });
     const players = [{ actor_id: 2, character_name: "Offline", action_player_id: "Offline#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" }];
-    const preview = starterKitEligiblePlayers(config, players, { ruleId: "last-seen-rule" });
+    const preview = carePackageEligiblePlayers(config, players, { ruleId: "last-seen-rule" });
     assert.equal(preview.rows[0].eligible, true);
-    const scan = await runStarterKitAutoScan(config, players);
+    const scan = await runCarePackageAutoScan(config, players);
     assert.equal(scan.granted, 0);
     assert.equal(scan.skipped, 1);
     assert.equal(scan.results[0].reason, "Not currently online");
@@ -221,7 +220,7 @@ test("last seen eligibility preview includes stale offline players but auto scan
 test("last seen eligible-only preview removes players after they receive the package", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
       autoGrantEnabled: true,
       kits: [{ id: "back-again", name: "Back Again", xp: 25, items: [] }],
@@ -229,14 +228,14 @@ test("last seen eligible-only preview removes players after they receive the pac
       autoGrantKitId: "back-again",
       autoGrantRules: [{ id: "last-seen-rule", enabled: true, kitId: "back-again", grantWhen: "last_seen", lastSeenDays: 30 }]
     });
-    await grantStarterKit(config, "Granted#1", {
-      confirmation: "GRANT STARTER KIT",
+    await grantCarePackage(config, "Granted#1", {
+      confirmation: "GRANT CARE PACKAGE",
       source: "auto",
       kitId: "back-again",
       actorId: 1,
       characterName: "Granted"
     });
-    const preview = starterKitEligiblePlayers(config, [
+    const preview = carePackageEligiblePlayers(config, [
       { actor_id: 1, character_name: "Granted", action_player_id: "Granted#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" },
       { actor_id: 2, character_name: "Waiting", action_player_id: "Waiting#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" }
     ], { ruleId: "last-seen-rule", onlyEligible: true });
@@ -246,12 +245,12 @@ test("last seen eligible-only preview removes players after they receive the pac
   }
 });
 
-test("starter kit grant all successes records granted status and summary", async () => {
+test("care package grant all successes records granted status and summary", async () => {
   const config = tempConfig();
   try {
     writeCatalog(config);
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [{ itemName: "Plant Fiber", quantity: 2, durability: 1 }] });
-    const result = await grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT" });
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [{ itemName: "Plant Fiber", quantity: 2, durability: 1 }] });
+    const result = await grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE" });
     assert.equal(result.status, "granted");
     assert.equal(result.ok, true);
     assert.match(result.summary, /2 succeeded, 0 failed/);
@@ -260,19 +259,19 @@ test("starter kit grant all successes records granted status and summary", async
   }
 });
 
-test("care package welcome message is sent as a grant action", async () => {
+test("care package send message is sent as a grant action", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
-      version: "starter-kit-v1",
+      version: "care-package-v1",
       xp: 10,
       items: [],
-      kits: [{ id: "starter-kit-v1", name: "Care Package", xp: 10, items: [], welcomeMessage: "Welcome" }]
+      kits: [{ id: "care-package-v1", name: "Care Package", xp: 10, items: [], sendMessage: "Welcome" }]
     });
     const db = fakePersonaDb();
-    const result = await grantStarterKit(config, "RedBlink#75570", {
-      confirmation: "GRANT STARTER KIT",
+    const result = await grantCarePackage(config, "RedBlink#75570", {
+      confirmation: "GRANT CARE PACKAGE",
       characterName: "RedBlink",
       funcomId: "RedBlink#75570"
     }, { db });
@@ -285,17 +284,17 @@ test("care package welcome message is sent as a grant action", async () => {
   }
 });
 
-test("care package welcome message fails clearly without recipient identity", async () => {
+test("care package send message fails clearly without recipient identity", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
-      version: "starter-kit-v1",
+      version: "care-package-v1",
       xp: 10,
       items: [],
-      kits: [{ id: "starter-kit-v1", name: "Care Package", xp: 10, items: [], welcomeMessage: "Welcome" }]
+      kits: [{ id: "care-package-v1", name: "Care Package", xp: 10, items: [], sendMessage: "Welcome" }]
     });
-    const result = await grantStarterKit(config, "12345", { confirmation: "GRANT STARTER KIT" }, { db: fakePersonaDb() });
+    const result = await grantCarePackage(config, "12345", { confirmation: "GRANT CARE PACKAGE" }, { db: fakePersonaDb() });
     assert.equal(result.status, "partial_failed");
     assert.match(result.summary, /recipient Funcom ID is unavailable/);
   } finally {
@@ -303,20 +302,20 @@ test("care package welcome message fails clearly without recipient identity", as
   }
 });
 
-test("starter kit grant partial failures records partial_failed status and summary", async () => {
+test("care package grant partial failures records partial_failed status and summary", async () => {
   const config = tempConfig();
   try {
     writeCatalog(config);
-    saveStarterKitConfig(config, {
+    saveCarePackageConfig(config, {
       enabled: true,
-      version: "starter-kit-v1",
+      version: "care-package-v1",
       xp: 10,
       items: [
         { itemName: "fiber", quantity: 10, durability: 1 },
         { itemName: "Cup of Water", quantity: 1, durability: 1 }
       ]
     });
-    const result = await grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT" });
+    const result = await grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE" });
     assert.equal(result.status, "partial_failed");
     assert.equal(result.ok, false);
     assert.match(result.summary, /2 succeeded, 1 failed/);
@@ -326,12 +325,12 @@ test("starter kit grant partial failures records partial_failed status and summa
   }
 });
 
-test("starter kit grant all failures records failed status and no blank summary", async () => {
+test("care package grant all failures records failed status and no blank summary", async () => {
   const config = tempConfig();
   try {
     writeCatalog(config);
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 0, items: [{ itemName: "fiber", quantity: 10, durability: 1 }] });
-    const result = await grantStarterKit(config, "RedBlink#75570", { confirmation: "GRANT STARTER KIT" });
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 0, items: [{ itemName: "fiber", quantity: 10, durability: 1 }] });
+    const result = await grantCarePackage(config, "RedBlink#75570", { confirmation: "GRANT CARE PACKAGE" });
     assert.equal(result.status, "failed");
     assert.equal(result.ok, false);
     assert.match(result.summary, /0 succeeded, 1 failed/);
@@ -341,16 +340,16 @@ test("starter kit grant all failures records failed status and no blank summary"
   }
 });
 
-test("starter kit bulk grant returns per-player granted skipped and failed rows", async () => {
+test("care package bulk grant returns per-player granted skipped and failed rows", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [] });
-    await grantStarterKit(config, "Existing#1", { confirmation: "GRANT STARTER KIT" });
-    const result = await grantEligibleStarterKits(config, [
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [] });
+    await grantCarePackage(config, "Existing#1", { confirmation: "GRANT CARE PACKAGE" });
+    const result = await grantEligibleCarePackages(config, [
       { actor_id: 1, character_name: "Existing", action_player_id: "Existing#1", online_status: "Online" },
       { actor_id: 2, character_name: "Missing", action_player_id: "", online_status: "Online" },
       { actor_id: 3, character_name: "New", action_player_id: "New#1", online_status: "Online" }
-    ], { confirmation: "GRANT STARTER KIT TO ELIGIBLE PLAYERS" });
+    ], { confirmation: "GRANT CARE PACKAGE TO ELIGIBLE PLAYERS" });
     assert.equal(result.granted, 1);
     assert.equal(result.skipped, 2);
     assert.equal(result.failed, 0);
@@ -360,40 +359,40 @@ test("starter kit bulk grant returns per-player granted skipped and failed rows"
   }
 });
 
-test("starter kit history hides skipped rows and can be cleared", async () => {
+test("care package history hides skipped rows and can be cleared", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [] });
-    await grantStarterKit(config, "Existing#1", { confirmation: "GRANT STARTER KIT" });
-    await grantEligibleStarterKits(config, [
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [] });
+    await grantCarePackage(config, "Existing#1", { confirmation: "GRANT CARE PACKAGE" });
+    await grantEligibleCarePackages(config, [
       { actor_id: 1, character_name: "Existing", action_player_id: "Existing#1", online_status: "Online" },
       { actor_id: 2, character_name: "New", action_player_id: "New#1", online_status: "Online" }
-    ], { confirmation: "GRANT STARTER KIT TO ELIGIBLE PLAYERS" });
-    const visibleHistory = starterKitHistory(config).rows;
+    ], { confirmation: "GRANT CARE PACKAGE TO ELIGIBLE PLAYERS" });
+    const visibleHistory = carePackageHistory(config).rows;
     assert.equal(visibleHistory.some((row) => row.status === "skipped"), false);
     assert.equal(visibleHistory.some((row) => row.character_name === "New"), true);
-    const cleared = clearStarterKitHistory(config);
+    const cleared = clearCarePackageHistory(config);
     assert.equal(cleared.ok, true);
-    assert.deepEqual(starterKitHistory(config).rows, []);
+    assert.deepEqual(carePackageHistory(config).rows, []);
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
 });
 
-test("starter kit auto scan only grants when enabled and players have action ids", async () => {
+test("care package auto scan only grants when enabled and players have action ids", async () => {
   const config = tempConfig();
   try {
-    saveStarterKitConfig(config, { enabled: false, version: "starter-kit-v1", xp: 10, items: [], autoGrantEnabled: true });
-    assert.equal((await runStarterKitAutoScan(config, [{ actor_id: 1, action_player_id: "A#1" }])).skipped, true);
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [], autoGrantEnabled: false });
-    assert.equal((await runStarterKitAutoScan(config, [{ actor_id: 1, action_player_id: "A#1" }])).skipped, true);
-    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [], autoGrantEnabled: true });
-    const result = await runStarterKitAutoScan(config, [
+    saveCarePackageConfig(config, { enabled: false, version: "care-package-v1", xp: 10, items: [], autoGrantEnabled: true });
+    assert.equal((await runCarePackageAutoScan(config, [{ actor_id: 1, action_player_id: "A#1" }])).skipped, true);
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [], autoGrantEnabled: false });
+    assert.equal((await runCarePackageAutoScan(config, [{ actor_id: 1, action_player_id: "A#1" }])).skipped, true);
+    saveCarePackageConfig(config, { enabled: true, version: "care-package-v1", xp: 10, items: [], autoGrantEnabled: true });
+    const result = await runCarePackageAutoScan(config, [
       { actor_id: 1, character_name: "A", action_player_id: "A#1", online_status: "Online" },
       { actor_id: 2, character_name: "B", action_player_id: "", online_status: "Online" }
     ]);
     assert.equal(result.granted, 1);
-    const duplicate = await runStarterKitAutoScan(config, [{ actor_id: 1, character_name: "A", action_player_id: "A#1", online_status: "Online" }]);
+    const duplicate = await runCarePackageAutoScan(config, [{ actor_id: 1, character_name: "A", action_player_id: "A#1", online_status: "Online" }]);
     assert.equal(duplicate.granted, 0);
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
@@ -401,7 +400,7 @@ test("starter kit auto scan only grants when enabled and players have action ids
 });
 
 function tempConfig() {
-  const repoRoot = mkdtempSync(join(tmpdir(), "starter-kit-test-"));
+  const repoRoot = mkdtempSync(join(tmpdir(), "care-package-test-"));
   return {
     repoRoot,
     generatedDir: resolve(repoRoot, "runtime/generated"),
