@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildBroadcastCommand, buildCarePackageWhisperPayload, buildShutdownBroadcastCommand, validateBroadcastMessage, validateLocalizedTexts, validatePublishLabel } from "../src/rmq.js";
+import { buildBroadcastCommand, buildCarePackageWhisperPayload, buildShutdownBroadcastCommand, publishCarePackageWhisper, validateBroadcastMessage, validateLocalizedTexts, validatePublishLabel } from "../src/rmq.js";
 
 test("builds verified ServiceBroadcast generic command payload", () => {
   const command = buildBroadcastCommand({ message: "Server event starts soon", durationSec: 45, title: "Event" });
@@ -66,10 +66,15 @@ test("builds Care Package private whisper courier payload", () => {
   assert.equal(inner.m_ChannelType, "ETextChatChannelType::Whispers");
   assert.equal(inner.m_SubChannelId, "RedBlink#75570");
   assert.equal(inner.m_bUseSpoofedUserName, false);
+  assert.deepEqual(inner.m_SpoofedUserNameFrom, { m_Id: "", m_DisplayName: "" });
   assert.equal(inner.m_FuncomIdFrom, "Server#00000");
   assert.equal(inner.m_UserNameTo, "RedBlink");
-  assert.equal(inner.m_Message.CultureInvariantString, "Welcome");
+  assert.equal(inner.m_Message.m_UnlocalizedMessage, "Welcome");
+  assert.equal(inner.m_Message.m_LocalizedMessage.m_TableId, "");
+  assert.equal(inner.m_Message.m_LocalizedMessage.m_Key, "");
+  assert.deepEqual(inner.m_Message.m_LocalizedMessage.m_FormatArgs, []);
   assert.equal(inner.m_TimeStamp, "2026-06-08T12:00:00.000Z");
+  assert.deepEqual(inner.m_OriginLocation, { X: 0, Y: 0, Z: 0 });
   assert.equal(inner.m_HasSeenMessage, false);
 });
 
@@ -79,3 +84,43 @@ test("validates RabbitMQ publish labels before eval construction", () => {
   assert.throws(() => validatePublishLabel("bad label"));
   assert.throws(() => validatePublishLabel("bad\"), halt(). %"));
 });
+
+test("publishes Care Package whisper to direct player queue when available", async () => {
+  const originalSpawn = globalThis.__testSpawn;
+  try {
+    const calls = [];
+    globalThis.__testSpawn = (command, args) => {
+      calls.push({ command, args });
+      return fakeSpawn("publish=ok exchange=default routing=254A06043E9F0B16_queue type=text_chat user_id=53657276657200000000000000000000 app_id=fls_backend\n");
+    };
+    const result = await publishCarePackageWhisper({ commandTimeoutMs: 1000 }, {
+      recipientFuncomId: "RedBlink#75570",
+      recipientCharacterName: "RedBlink",
+      recipientQueue: "254A06043E9F0B16_queue",
+      senderFuncomId: "Server#0001",
+      senderHexFlsId: "A5C0DE5E12A00001",
+      message: "Welcome"
+    });
+    assert.equal(result.amqp.exchange, "default");
+    assert.equal(result.amqp.routingKey, "254A06043E9F0B16_queue");
+    assert.equal(result.amqp.userId, "A5C0DE5E12A00001");
+    assert.equal(result.amqp.senderHexFlsId, "A5C0DE5E12A00001");
+    assert.match(calls[0].args.join(" "), /rabbitmqctl eval/);
+  } finally {
+    globalThis.__testSpawn = originalSpawn;
+  }
+});
+
+function fakeSpawn(stdout) {
+  const listeners = {};
+  const child = {
+    stdout: { on(event, fn) { if (event === "data") setImmediate(() => fn(Buffer.from(stdout))); } },
+    stderr: { on() {} },
+    on(event, fn) {
+      listeners[event] = fn;
+      if (event === "close") setImmediate(() => fn(0));
+    },
+    kill() {}
+  };
+  return child;
+}

@@ -59,6 +59,8 @@ test("players query uses parameterized search input", async () => {
   assert.match(playerQuery.text, /as player_pawn_id/);
   assert.match(playerQuery.text, /as funcom_id/);
   assert.match(playerQuery.text, /as action_player_id/);
+  assert.match(playerQuery.text, /A5C0DE5E12A00001/);
+  assert.match(playerQuery.text, /Server#0001/);
   assert.match(playerQuery.text, /\$1/);
   assert.deepEqual(playerQuery.values, ["%RedBlink'; drop table dune.actors; --%"]);
   assert.equal(result.rows[0].actor_id, 82);

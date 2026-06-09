@@ -14,7 +14,7 @@ import { audit, recordAdminHistory } from "./audit.js";
 import { redact } from "./redact.js";
 import { listCatalogItems, resolveCatalogItem } from "./adminCatalog.js";
 import { buildBroadcastCommand, buildShutdownBroadcastCommand, publishServerCommand } from "./rmq.js";
-import { enableStarterKit, grantEligibleStarterKits, grantStarterKit, retryStarterKitGrant, runStarterKitAutoScan, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitEligiblePlayers, starterKitHistory } from "./carePackage.js";
+import { clearStarterKitHistory, enableStarterKit, grantEligibleStarterKits, grantStarterKit, retryStarterKitGrant, runStarterKitAutoScan, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitEligiblePlayers, starterKitHistory } from "./carePackage.js";
 import { readJsonBody, safeStaticTarget } from "./httpSafety.js";
 import { parseBackupAutoStatus, parseBackupListRows } from "./statusParsers.js";
 
@@ -278,6 +278,7 @@ async function handleApi(req, res) {
   if (path === "/api/starter-kit/capabilities") return json(res, 200, starterKitCapabilities());
   if (path === "/api/starter-kit/config" && req.method === "POST") return starterKitConfigRoute(req, res);
   if (path === "/api/starter-kit/config") return json(res, 200, starterKitConfig(config));
+  if (path === "/api/starter-kit/history/clear" && req.method === "POST") return starterKitClearHistoryRoute(req, res);
   if (path === "/api/starter-kit/grants" || path === "/api/starter-kit/history") return json(res, 200, starterKitHistory(config, url.searchParams.get("limit") || 100));
   if (path === "/api/starter-kit/eligible") return starterKitEligibleRoute(req, res);
   if (path === "/api/starter-kit/grant-eligible" && req.method === "POST") return starterKitGrantEligibleRoute(req, res);
@@ -1145,9 +1146,13 @@ async function starterKitGrantRoute(req, res, path) {
 
 async function starterKitEligibleRoute(req, res) {
   try {
+    const params = new URL(req.url, "http://localhost").searchParams;
     const players = await duneDb.listPlayers(db, {});
     if (players.capabilities?.players === false) return json(res, 501, { supported: false, reason: players.reason || "Player list is unavailable" });
-    return json(res, 200, starterKitEligiblePlayers(config, players.rows || [], { ruleId: new URL(req.url, "http://localhost").searchParams.get("ruleId") || "" }));
+    return json(res, 200, starterKitEligiblePlayers(config, players.rows || [], {
+      ruleId: params.get("ruleId") || "",
+      onlyEligible: params.get("onlyEligible") === "1"
+    }));
   } catch (error) {
     return json(res, 500, { supported: false, error: redact(error.message || error), reason: redact(error.message || error) });
   }
@@ -1189,6 +1194,20 @@ async function starterKitRetryRoute(req, res, path) {
     return json(res, result.ok ? 200 : 207, result);
   } catch (error) {
     audit(config, req, "starter-kit.retry", { supported: false, grantId, error: redact(error.message || error) });
+    return json(res, 400, { error: redact(error.message || error) });
+  }
+}
+
+async function starterKitClearHistoryRoute(req, res) {
+  const body = await readJson(req);
+  const phrase = "CLEAR GRANT HISTORY";
+  if (body.confirmation !== phrase) return json(res, 400, { error: `Confirmation phrase required: ${phrase}` });
+  try {
+    const result = clearStarterKitHistory(config);
+    audit(config, req, "starter-kit.history-clear", { supported: true, removed: result.removed });
+    return json(res, 200, result);
+  } catch (error) {
+    audit(config, req, "starter-kit.history-clear", { supported: false, error: redact(error.message || error) });
     return json(res, 400, { error: redact(error.message || error) });
   }
 }

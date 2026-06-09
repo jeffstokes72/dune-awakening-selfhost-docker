@@ -130,6 +130,9 @@ export async function listPlayers(db, { online = false, q = "" } = {}) {
   const lastSeenSelect = await playerLastSeenSelect(db);
   const values = [];
   let where = "a.class ilike '%PlayerCharacter%'";
+  where += " and coalesce(ac.\"user\", '') <> 'A5C0DE5E12A00001'";
+  where += " and coalesce(ac.funcom_id, '') <> 'Server#0001'";
+  where += " and coalesce(ps.character_name, '') <> 'Server'";
   if (online) where += " and coalesce(ps.online_status::text, '') = 'Online'";
   if (q) {
     values.push(`%${q}%`);
@@ -141,7 +144,7 @@ export async function listPlayers(db, { online = false, q = "" } = {}) {
            coalesce(a.owner_account_id, 0) as account_id,
            coalesce(ps.character_name, '') as character_name,
            coalesce(ps.player_controller_id, 0) as player_controller_id,
-           coalesce(ac."user", '') as funcom_id,
+           coalesce(ac.funcom_id, '') as funcom_id,
            coalesce(ac."user", '') as fls_id,
            case
              when nullif(ac."user", '') is not null then ac."user"
@@ -163,7 +166,7 @@ export async function listPlayers(db, { online = false, q = "" } = {}) {
 
 async function playerLastSeenSelect(db) {
   const candidates = [
-    ["player_state", "ps", ["last_seen", "last_seen_at", "last_online", "last_online_at", "last_login", "last_login_at", "last_activity", "last_activity_at", "updated_at"]],
+    ["player_state", "ps", ["last_seen", "last_seen_at", "last_online", "last_online_at", "last_avatar_activity", "last_login", "last_login_at", "last_login_time", "last_activity", "last_activity_at", "updated_at"]],
     ["actors", "a", ["last_seen", "last_seen_at", "last_online", "last_online_at", "last_login", "last_login_at", "last_activity", "last_activity_at", "updated_at"]],
     ["accounts", "ac", ["last_seen", "last_seen_at", "last_online", "last_online_at", "last_login", "last_login_at", "last_activity", "last_activity_at", "updated_at"]]
   ];
@@ -184,7 +187,7 @@ export async function playerProfile(db, id) {
            coalesce(a.owner_account_id, 0) as account_id,
            coalesce(ps.character_name, '') as character_name,
            coalesce(ps.player_controller_id, 0) as player_controller_id,
-           coalesce(ac."user", '') as funcom_id,
+           coalesce(ac.funcom_id, '') as funcom_id,
            coalesce(ac."user", '') as fls_id,
            case
              when nullif(ac."user", '') is not null then ac."user"

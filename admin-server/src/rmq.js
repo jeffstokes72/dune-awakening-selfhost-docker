@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { redact } from "./redact.js";
 
 const BUILTIN_COMMAND_AUTH_TOKEN = "Nu6VmPWUMvdPMeB7qErr";
@@ -70,19 +71,29 @@ export function buildCarePackageWhisperPayload({ recipientFuncomId, recipientCha
   const recipientName = validateWhisperName(recipientCharacterName, "recipient character name");
   const senderId = validateWhisperIdentity(senderFuncomId, "sender Funcom ID");
   const text = validateBroadcastMessage(message);
-  const id = validateMessageId(messageId || `care-package-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const id = validateMessageId(messageId || randomUUID());
   const timestamp = new Date(now).toISOString();
   const inner = {
     m_Id: id,
     m_ChannelType: "ETextChatChannelType::Whispers",
     m_SubChannelId: recipientId,
     m_bUseSpoofedUserName: false,
+    m_SpoofedUserNameFrom: {
+      m_Id: "",
+      m_DisplayName: ""
+    },
     m_FuncomIdFrom: senderId,
     m_UserNameTo: recipientName,
     m_Message: {
-      CultureInvariantString: text
+      m_UnlocalizedMessage: text,
+      m_LocalizedMessage: {
+        m_TableId: "",
+        m_Key: "",
+        m_FormatArgs: []
+      }
     },
     m_TimeStamp: timestamp,
+    m_OriginLocation: { X: 0, Y: 0, Z: 0 },
     m_HasSeenMessage: false
   };
   return {
@@ -96,15 +107,33 @@ export function buildCarePackageWhisperPayload({ recipientFuncomId, recipientCha
 
 export async function publishCarePackageWhisper(config, fields) {
   const senderHexFlsId = validateHexFlsId(fields?.senderHexFlsId);
-  const routingKey = validateWhisperIdentity(fields?.recipientFuncomId, "recipient Funcom ID");
+  const amqpUserId = validateHexFlsId(fields?.amqpUserId || senderHexFlsId);
+  const directQueue = fields?.recipientQueue ? validateQueueName(fields.recipientQueue, "recipient queue") : "";
+  const routingKey = directQueue || validateWhisperIdentity(fields?.recipientFuncomId, "recipient Funcom ID");
+  const exchange = directQueue ? "" : "chat.whispers";
+  const exchangeLabel = directQueue ? "default" : "chat.whispers";
   const payload = buildCarePackageWhisperPayload(fields);
   const outerB64 = Buffer.from(JSON.stringify(payload.outer), "utf8").toString("base64");
   const routingB64 = Buffer.from(routingKey, "utf8").toString("base64");
-  const senderB64 = Buffer.from(senderHexFlsId, "utf8").toString("base64");
-  const evalCode = `Outer = base64:decode(<<"${outerB64}">>), Routing = base64:decode(<<"${routingB64}">>), Sender = base64:decode(<<"${senderB64}">>), XName = rabbit_misc:r(<<"/">>, exchange, <<"chat.whispers">>), X = rabbit_exchange:lookup_or_die(XName), MsgId = list_to_binary("web-care-package-whisper-" ++ integer_to_list(erlang:system_time(millisecond))), P = {list_to_atom("P_basic"), <<"Content">>, undefined, [], undefined, undefined, undefined, undefined, undefined, MsgId, undefined, <<"text_chat">>, Sender, <<"arrakis-server-console">>, undefined}, Content = rabbit_basic:build_content(P, Outer), {ok, Msg} = rabbit_basic:message(XName, Routing, Content), Result = rabbit_queue_type:publish_at_most_once(X, Msg), io:format("publish=~p exchange=chat.whispers routing=~s type=text_chat user_id=~s~n", [Result, Routing, Sender]).`;
+  const senderB64 = Buffer.from(amqpUserId, "utf8").toString("base64");
+  const exchangeB64 = Buffer.from(exchange, "utf8").toString("base64");
+  const exchangeLabelB64 = Buffer.from(exchangeLabel, "utf8").toString("base64");
+  const evalCode = `Outer = base64:decode(<<"${outerB64}">>), Routing = base64:decode(<<"${routingB64}">>), Sender = base64:decode(<<"${senderB64}">>), Exchange = base64:decode(<<"${exchangeB64}">>), ExchangeLabel = base64:decode(<<"${exchangeLabelB64}">>), XName = rabbit_misc:r(<<"/">>, exchange, Exchange), X = rabbit_exchange:lookup_or_die(XName), MsgId = list_to_binary("web-care-package-whisper-" ++ integer_to_list(erlang:system_time(millisecond))), P = {list_to_atom("P_basic"), <<"Content">>, undefined, [], undefined, undefined, undefined, undefined, undefined, MsgId, undefined, <<"text_chat">>, Sender, <<"fls_backend">>, undefined}, Content = rabbit_basic:build_content(P, Outer), {ok, Msg} = rabbit_basic:message(XName, Routing, Content), Result = rabbit_queue_type:publish_at_most_once(X, Msg), io:format("publish=~p exchange=~s routing=~s type=text_chat user_id=~s app_id=fls_backend~n", [Result, ExchangeLabel, Routing, Sender]).`;
   const output = await dockerExec(["exec", RMQ_CONTAINER, "rabbitmqctl", "eval", evalCode], config.commandTimeoutMs);
   if (!/publish=ok/.test(output.stdout)) throw new Error("RabbitMQ whisper publish did not report publish=ok");
-  return { ...output, payload };
+  return {
+    ...output,
+    stdout: `${output.stdout}outer=${JSON.stringify(payload.outer)}\ninner=${payload.outer.Content}\n`,
+    payload,
+    amqp: {
+      exchange: exchangeLabel,
+      routingKey,
+      type: "text_chat",
+      userId: amqpUserId,
+      senderHexFlsId,
+      appId: "fls_backend"
+    }
+  };
 }
 
 export async function publishServerCommand(config, fields, label = "web-admin") {
@@ -140,7 +169,8 @@ function commandAuthToken(repoRoot) {
 
 function dockerExec(args, timeoutMs = 30000) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("docker", args, { shell: false, env: { ...process.env } });
+    const spawnFn = globalThis.__testSpawn || spawn;
+    const child = spawnFn("docker", args, { shell: false, env: { ...process.env } });
     const timeout = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
     let stdout = "";
     let stderr = "";
@@ -198,6 +228,12 @@ function validateHexFlsId(value) {
   const raw = String(value || "").trim();
   if (/^[A-Fa-f0-9]{16,64}$/.test(raw)) return raw;
   throw new Error("Care Package welcome whisper cannot be sent: sender hex FLS ID is unavailable or invalid");
+}
+
+function validateQueueName(value, label) {
+  const raw = String(value || "").trim();
+  if (/^[A-Za-z0-9_.:+/-]{1,220}$/.test(raw)) return raw;
+  throw new Error(`Care Package welcome whisper cannot be sent: ${label} is unavailable or invalid`);
 }
 
 function validateMessageId(value) {

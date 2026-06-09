@@ -37,11 +37,17 @@ export const starterKitApi = {
   saveConfig: (config: StarterKitConfig, confirmation: string) => post<StarterKitConfig>("/api/starter-kit/config", { ...config, confirmation }),
   grants: () => api<{ rows: Record<string, unknown>[] }>("/api/starter-kit/grants"),
   history: () => api<{ rows: Record<string, unknown>[] }>("/api/starter-kit/history"),
-  eligible: (ruleId?: string) => api<{ config: StarterKitConfig; rows: Record<string, unknown>[] }>(`/api/starter-kit/eligible${ruleId ? `?ruleId=${encodeURIComponent(ruleId)}` : ""}`),
+  eligible: (ruleId?: string, onlyEligible = false) => {
+    const params = new URLSearchParams();
+    if (ruleId) params.set("ruleId", ruleId);
+    if (onlyEligible) params.set("onlyEligible", "1");
+    return api<{ config: StarterKitConfig; rows: Record<string, unknown>[] }>(`/api/starter-kit/eligible${params.size ? `?${params.toString()}` : ""}`);
+  },
   grantEligible: (confirmation: string) => post<Record<string, unknown>>("/api/starter-kit/grant-eligible", { confirmation }),
   run: (confirmation = "RUN STARTER KIT SCAN") => post<Record<string, unknown>>("/api/starter-kit/run", { confirmation }),
   grant: (playerId: string, confirmation: string, kitId?: string) => post<Record<string, unknown>>(`/api/starter-kit/grant/${encodeURIComponent(playerId)}`, { confirmation, kitId }),
   retry: (grantId: string, confirmation: string) => post<Record<string, unknown>>(`/api/starter-kit/retry/${encodeURIComponent(grantId)}`, { confirmation }),
+  clearHistory: (confirmation = "CLEAR GRANT HISTORY") => post<{ ok: boolean; removed: number; rows: Record<string, unknown>[] }>("/api/starter-kit/history/clear", { confirmation }),
   enable: (confirmation: string) => post<StarterKitConfig>("/api/starter-kit/enable", { confirmation }),
   disable: (confirmation: string) => post<StarterKitConfig>("/api/starter-kit/disable", { confirmation })
 };

@@ -7,10 +7,13 @@ import { publishCarePackageWhisper } from "./rmq.js";
 
 const DEFAULT_KIT_ID = "starter-kit-v1";
 const CARE_PACKAGE_SERVER_PERSONA = {
-  accountId: "922337203685477000",
-  funcomId: "Server#00000",
-  hexFlsId: "53657276657200000000000000000000",
-  displayName: "Server"
+  accountId: "9000002",
+  funcomId: "Server#0001",
+  hexFlsId: "A5C0DE5E12A00001",
+  displayName: "Server",
+  playerControllerId: "900000201",
+  playerStateId: "900000202",
+  playerPawnId: "900000203"
 };
 const DEFAULT_KIT = {
   id: DEFAULT_KIT_ID,
@@ -73,8 +76,18 @@ export function starterKitHistory(config, limit = 100) {
     .slice(-safeLimit)
     .map((line) => JSON.parse(line))
     .map(normalizeHistoryRow)
+    .filter((row) => String(row.status || "").toLowerCase() !== "skipped")
     .reverse();
   return { rows };
+}
+
+export function clearStarterKitHistory(config) {
+  const file = grantsPath(config);
+  const removed = existsSync(file) ? readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).length : 0;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, "", { mode: 0o600 });
+  try { chmodSync(file, 0o600); } catch {}
+  return { ok: true, removed, rows: [] };
 }
 
 function normalizeHistoryRow(row = {}) {
@@ -111,11 +124,12 @@ export function starterKitEligiblePlayers(config, players = [], options = {}) {
   const rule = options.ruleId ? kitConfig.autoGrantRules.find((entry) => entry.id === options.ruleId) : null;
   const kit = rule ? selectedKit(kitConfig, rule.kitId, rule.grantWhen, rule.lastSeenDays) : selectedKit(kitConfig, kitConfig.autoGrantKitId);
   const history = starterKitHistory(config, 500).rows;
+  const rows = players.map((player) => eligibilityForPlayer(kit, history, normalizePlayer(player)));
   return {
     config: kitConfig,
     kit,
     ruleId: rule?.id || "",
-    rows: players.map((player) => eligibilityForPlayer(kit, history, normalizePlayer(player)))
+    rows: options.onlyEligible ? rows.filter((row) => row.eligible) : rows
   };
 }
 
@@ -139,7 +153,8 @@ export async function grantEligibleStarterKits(config, players = [], body = {}, 
         source: "bulk",
         characterName: player.character_name,
         actorId: player.actor_id,
-        funcomId: player.funcom_id || player.fls_id || player.action_player_id
+        funcomId: player.funcom_id || player.fls_id || player.action_player_id,
+        flsId: player.fls_id || player.action_player_id
       }, context));
     } catch (error) {
       const row = failedGrant(config, kit, player, error.message || String(error), "bulk");
@@ -163,7 +178,7 @@ export async function runStarterKitAutoScan(config, players = [], source = "auto
       continue;
     }
     const history = starterKitHistory(config, 500).rows;
-    const rows = players.map((player) => eligibilityForPlayer(kit, history, normalizePlayer(player)));
+    const rows = players.map((player) => eligibilityForPlayer(kit, history, normalizePlayer(player), { requireOnline: true }));
     for (const player of rows) {
       if (!player.eligible) {
         results.push(skippedGrant(config, kit, player, player.reason || "not eligible", source));
@@ -176,7 +191,8 @@ export async function runStarterKitAutoScan(config, players = [], source = "auto
           kitId: kit.id,
           characterName: player.character_name,
           actorId: player.actor_id,
-          funcomId: player.funcom_id || player.fls_id || player.action_player_id
+          funcomId: player.funcom_id || player.fls_id || player.action_player_id,
+          flsId: player.fls_id || player.action_player_id
         }, context));
       } catch (error) {
         results.push(failedGrant(config, kit, player, error.message || String(error), source));
@@ -194,13 +210,42 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
   const kit = selectedKit(kitConfig, body.kitId || (source === "manual" ? kitConfig.activeKitId : kitConfig.autoGrantKitId));
   validatePlayerTarget(playerId);
   if (!kit.items.length && !kit.xp) throw new Error("Care Package has no configured items or XP");
-  if (source !== "manual" && hasSuccessfulGrant(config, playerId, kit.id)) {
+  if (source !== "manual" && hasSuccessfulGrant(config, playerId, kit.id, body.actorId)) {
     throw new Error(`Care Package ${kit.name} was already granted to ${playerId}`);
   }
 
   const grantId = randomUUID();
   const startedAt = new Date().toISOString();
   const results = [];
+  if (kit.welcomeMessage) {
+    try {
+      const persona = await ensureCarePackageServerPersona(context.db);
+      const recipient = resolveWelcomeWhisperRecipient(playerId, body);
+      const result = config.mockMode
+        ? { code: 0, stdout: "mock care package welcome whisper\n", stderr: "", payload: null }
+        : await publishCarePackageWhisper(config, {
+            recipientFuncomId: recipient.funcomId,
+            recipientCharacterName: recipient.characterName,
+            recipientQueue: recipient.queue,
+            senderFuncomId: persona.funcomId,
+            senderHexFlsId: persona.hexFlsId,
+            amqpUserId: persona.hexFlsId,
+            message: kit.welcomeMessage
+          });
+      results.push({
+        ok: true,
+        operation: "carePackageWelcomeWhisper",
+        recipientFuncomId: recipient.funcomId,
+        recipientCharacterName: recipient.characterName,
+        senderName: persona.displayName,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.code
+      });
+    } catch (error) {
+      results.push({ ok: false, operation: "carePackageWelcomeWhisper", error: error.message || String(error) });
+    }
+  }
   for (const item of kit.items) {
     try {
       const resolved = resolveCatalogItem(config.repoRoot, item.itemId ? { itemId: item.itemId } : { itemName: item.itemName });
@@ -227,33 +272,6 @@ export async function grantStarterKit(config, playerId, body = {}, context = {})
       results.push({ ok: true, operation: "adminAddXp", amount: kit.xp, stdout: result.stdout, stderr: result.stderr, exitCode: result.code });
     } catch (error) {
       results.push({ ok: false, operation: "adminAddXp", amount: kit.xp, error: error.message || String(error) });
-    }
-  }
-  if (kit.welcomeMessage) {
-    try {
-      const persona = await ensureCarePackageServerPersona(context.db);
-      const recipient = resolveWelcomeWhisperRecipient(playerId, body);
-      const result = config.mockMode
-        ? { code: 0, stdout: "mock care package welcome whisper\n", stderr: "", payload: null }
-        : await publishCarePackageWhisper(config, {
-            recipientFuncomId: recipient.funcomId,
-            recipientCharacterName: recipient.characterName,
-            senderFuncomId: persona.funcomId,
-            senderHexFlsId: persona.hexFlsId,
-            message: kit.welcomeMessage
-          });
-      results.push({
-        ok: true,
-        operation: "carePackageWelcomeWhisper",
-        recipientFuncomId: recipient.funcomId,
-        recipientCharacterName: recipient.characterName,
-        senderName: persona.displayName,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.code
-      });
-    } catch (error) {
-      results.push({ ok: false, operation: "carePackageWelcomeWhisper", error: error.message || String(error) });
     }
   }
   const aggregate = summarizeActionResults(results);
@@ -294,13 +312,13 @@ export function validateStarterKitConfig(body = {}) {
   };
 }
 
-function eligibilityForPlayer(kit, history, player) {
+function eligibilityForPlayer(kit, history, player, options = {}) {
   if (!player.action_player_id) return { ...player, eligible: false, reason: "Missing admin action ID" };
   if (kit.grantWhen === "first_online" && String(player.online_status || "").toLowerCase() !== "online") {
     return { ...player, eligible: false, reason: "Not currently online" };
   }
   if (kit.grantWhen === "last_seen") {
-    if (String(player.online_status || "").toLowerCase() !== "online") {
+    if (options.requireOnline && String(player.online_status || "").toLowerCase() !== "online") {
       return { ...player, eligible: false, reason: "Not currently online" };
     }
     const lastSeen = parseTimestamp(player.last_seen);
@@ -311,10 +329,17 @@ function eligibilityForPlayer(kit, history, player) {
       return { ...player, eligible: false, reason: `Seen within ${days} days` };
     }
   }
-  if (history.some((row) => isSuccessfulGrant(row) && (row.kitId || row.version) === kit.id && row.playerId === player.action_player_id)) {
+  if (history.some((row) => isSuccessfulGrant(row) && (row.kitId || row.version) === kit.id && grantMatchesPlayer(row, player))) {
     return { ...player, eligible: false, reason: `Already granted ${kit.name}` };
   }
   return { ...player, eligible: true, reason: "" };
+}
+
+function grantMatchesPlayer(row, player) {
+  const rowActorId = String(row.actor_id || row.actorId || "").trim();
+  const playerActorId = String(player.actor_id || player.player_pawn_id || "").trim();
+  if (rowActorId && playerActorId) return rowActorId === playerActorId;
+  return String(row.playerId || row.action_player_id || "").trim() === String(player.action_player_id || "").trim();
 }
 
 function normalizePlayer(player = {}) {
@@ -331,8 +356,8 @@ function normalizePlayer(player = {}) {
   };
 }
 
-function hasSuccessfulGrant(config, playerId, kitId) {
-  return starterKitHistory(config, 500).rows.some((row) => isSuccessfulGrant(row) && (row.kitId || row.version) === kitId && row.playerId === playerId);
+function hasSuccessfulGrant(config, playerId, kitId, actorId = "") {
+  return starterKitHistory(config, 500).rows.some((row) => isSuccessfulGrant(row) && (row.kitId || row.version) === kitId && grantMatchesPlayer(row, { action_player_id: playerId, actor_id: actorId }));
 }
 
 function isSuccessfulGrant(row) {
@@ -498,40 +523,121 @@ function validatePlayerTarget(value) {
 
 function resolveWelcomeWhisperRecipient(playerId, body = {}) {
   const funcomId = String(body.funcomId || body.recipientFuncomId || body.flsId || (/^[A-Za-z0-9_.-]+#\d+$/.test(String(playerId || "")) ? playerId : "")).trim();
+  const flsId = String(body.flsId || body.recipientFlsId || (/^[A-Fa-f0-9]{16,64}$/.test(String(playerId || "")) ? playerId : "")).trim();
   const characterName = String(body.characterName || body.recipientCharacterName || body.userNameTo || "").trim();
   if (!funcomId) throw new Error("Care Package welcome whisper cannot be sent: recipient Funcom ID is unavailable");
   if (!characterName) throw new Error("Care Package welcome whisper cannot be sent: recipient character name is unavailable");
-  return { funcomId, characterName };
+  return { funcomId, characterName, flsId, queue: flsId ? `${flsId}_queue` : "" };
 }
 
 async function ensureCarePackageServerPersona(db) {
   if (!db?.query) throw new Error("Care Package welcome whisper cannot be sent: database is unavailable for Server persona setup");
+  const encryptedColumns = await tableColumns(db, "encrypted_accounts");
+  if (encryptedColumns.has("id")) {
+    const encryptedValues = [["id", CARE_PACKAGE_SERVER_PERSONA.accountId]];
+    if (encryptedColumns.has("user")) encryptedValues.push(["user", CARE_PACKAGE_SERVER_PERSONA.hexFlsId]);
+    if (encryptedColumns.has("encrypted_funcom_id")) encryptedValues.push(["encrypted_funcom_id", Buffer.from(CARE_PACKAGE_SERVER_PERSONA.funcomId, "utf8")]);
+    if (encryptedColumns.has("takeoverable")) encryptedValues.push(["takeoverable", false]);
+    if (encryptedValues.length > 1) await upsertDuneRow(db, "encrypted_accounts", encryptedValues, "id");
+  }
+
   const accountsColumns = await tableColumns(db, "accounts");
   if (!accountsColumns.has("id")) throw new Error("Care Package welcome whisper cannot be sent: dune.accounts.id is unavailable for Server persona setup");
-  const accountValues = [["id", CARE_PACKAGE_SERVER_PERSONA.accountId]];
-  if (accountsColumns.has("user")) accountValues.push(["user", CARE_PACKAGE_SERVER_PERSONA.funcomId]);
-  if (accountsColumns.has("funcom_id")) accountValues.push(["funcom_id", CARE_PACKAGE_SERVER_PERSONA.funcomId]);
-  if (accountsColumns.has("display_name")) accountValues.push(["display_name", CARE_PACKAGE_SERVER_PERSONA.displayName]);
-  if (accountsColumns.has("name")) accountValues.push(["name", CARE_PACKAGE_SERVER_PERSONA.displayName]);
-  if (accountValues.length < 2) throw new Error("Care Package welcome whisper cannot be sent: dune.accounts has no Funcom ID column for Server persona setup");
-  await upsertDuneRow(db, "accounts", accountValues, "id");
-
-  const encryptedColumns = await tableColumns(db, "encrypted_accounts");
-  if (encryptedColumns.has("id") && encryptedColumns.has("encrypted_funcom_id")) {
-    await upsertDuneRow(db, "encrypted_accounts", [
-      ["id", CARE_PACKAGE_SERVER_PERSONA.accountId],
-      ["encrypted_funcom_id", Buffer.from(CARE_PACKAGE_SERVER_PERSONA.hexFlsId, "utf8")]
-    ], "id");
+  if (await isWritableDuneRelation(db, "accounts")) {
+    const accountValues = [["id", CARE_PACKAGE_SERVER_PERSONA.accountId]];
+    if (accountsColumns.has("user")) accountValues.push(["user", CARE_PACKAGE_SERVER_PERSONA.hexFlsId]);
+    if (accountsColumns.has("funcom_id")) accountValues.push(["funcom_id", CARE_PACKAGE_SERVER_PERSONA.funcomId]);
+    if (accountsColumns.has("display_name")) accountValues.push(["display_name", CARE_PACKAGE_SERVER_PERSONA.displayName]);
+    if (accountsColumns.has("name")) accountValues.push(["name", CARE_PACKAGE_SERVER_PERSONA.displayName]);
+    if (accountValues.length < 2) throw new Error("Care Package welcome whisper cannot be sent: dune.accounts has no Funcom ID column for Server persona setup");
+    await upsertDuneRow(db, "accounts", accountValues, "id");
+  } else if (!encryptedColumns.has("encrypted_funcom_id")) {
+    throw new Error("Care Package welcome whisper cannot be sent: writable Server persona account table is unavailable");
   }
 
   const playerStateColumns = await tableColumns(db, "player_state");
-  if (playerStateColumns.has("account_id") && playerStateColumns.has("character_name")) {
+  if (playerStateColumns.has("account_id") && playerStateColumns.has("character_name") && await isWritableDuneRelation(db, "player_state")) {
     await upsertDuneRow(db, "player_state", [
       ["account_id", CARE_PACKAGE_SERVER_PERSONA.accountId],
       ["character_name", CARE_PACKAGE_SERVER_PERSONA.displayName]
     ], "account_id").catch(() => null);
   }
-  return CARE_PACKAGE_SERVER_PERSONA;
+  await ensureCarePackageServerPlayerRows(db);
+  return await resolveCarePackageServerPersona(db);
+}
+
+async function ensureCarePackageServerPlayerRows(db) {
+  await ensureCarePackageServerActors(db);
+
+  const encryptedPlayerStateColumns = await tableColumns(db, "encrypted_player_state");
+  if (encryptedPlayerStateColumns.has("account_id") && encryptedPlayerStateColumns.has("encrypted_character_name")) {
+    const playerStateValues = [
+      ["account_id", CARE_PACKAGE_SERVER_PERSONA.accountId],
+      ["encrypted_character_name", { rawSql: "dune.encrypt_user_data($VALUE)" }]
+    ];
+    if (encryptedPlayerStateColumns.has("last_avatar_activity")) playerStateValues.push(["last_avatar_activity", new Date(0)]);
+    if (encryptedPlayerStateColumns.has("player_controller_id")) playerStateValues.push(["player_controller_id", CARE_PACKAGE_SERVER_PERSONA.playerControllerId]);
+    if (encryptedPlayerStateColumns.has("player_pawn_id")) playerStateValues.push(["player_pawn_id", CARE_PACKAGE_SERVER_PERSONA.playerPawnId]);
+    if (encryptedPlayerStateColumns.has("player_state_id")) playerStateValues.push(["player_state_id", CARE_PACKAGE_SERVER_PERSONA.playerStateId]);
+    if (encryptedPlayerStateColumns.has("life_state")) playerStateValues.push(["life_state", { rawSql: "$VALUE::playerlifestate", value: "Alive" }]);
+    if (encryptedPlayerStateColumns.has("online_status")) playerStateValues.push(["online_status", { rawSql: "$VALUE::playerconnectionstatus", value: "Offline" }]);
+    if (encryptedPlayerStateColumns.has("previous_server_partition_id")) playerStateValues.push(["previous_server_partition_id", 1]);
+    if (encryptedPlayerStateColumns.has("is_coriolis_processed")) playerStateValues.push(["is_coriolis_processed", true]);
+    if (encryptedPlayerStateColumns.has("return_dimension_index")) playerStateValues.push(["return_dimension_index", 0]);
+    if (encryptedPlayerStateColumns.has("home_dimension_index")) playerStateValues.push(["home_dimension_index", 0]);
+    await upsertDuneRow(db, "encrypted_player_state", playerStateValues, "account_id", {
+      encrypted_character_name: CARE_PACKAGE_SERVER_PERSONA.displayName
+    });
+  }
+}
+
+async function ensureCarePackageServerActors(db) {
+  const actorColumns = await tableColumns(db, "actors");
+  if (!actorColumns.has("id")) return;
+  const actors = [
+    [CARE_PACKAGE_SERVER_PERSONA.playerControllerId, "/Game/Dune/Characters/Player/BP_DunePlayerController.BP_DunePlayerController_C"],
+    [CARE_PACKAGE_SERVER_PERSONA.playerStateId, "/Script/DuneSandbox.DunePlayerState"],
+    [CARE_PACKAGE_SERVER_PERSONA.playerPawnId, "/Game/Dune/Characters/Player/BP_DunePlayerCharacter.BP_DunePlayerCharacter_C"]
+  ];
+  for (const [id, actorClass] of actors) {
+    const values = [["id", id]];
+    if (actorColumns.has("class")) values.push(["class", actorClass]);
+    if (actorColumns.has("map")) values.push(["map", "HaggaBasin"]);
+    if (actorColumns.has("partition_id")) values.push(["partition_id", 1]);
+    if (actorColumns.has("dimension_index")) values.push(["dimension_index", 0]);
+    if (actorColumns.has("gas_attributes")) values.push(["gas_attributes", {}]);
+    if (actorColumns.has("properties")) values.push(["properties", {}]);
+    if (actorColumns.has("owner_account_id")) values.push(["owner_account_id", CARE_PACKAGE_SERVER_PERSONA.accountId]);
+    if (actorColumns.has("serial")) values.push(["serial", 1]);
+    await upsertDuneRow(db, "actors", values, "id");
+  }
+}
+
+async function resolveCarePackageServerPersona(db) {
+  const result = await db.query(`
+    select coalesce("user", '') as hex_fls_id,
+           coalesce(funcom_id, '') as funcom_id
+    from dune.accounts
+    where id = $1
+    limit 1`, [CARE_PACKAGE_SERVER_PERSONA.accountId]);
+  const row = result.rows?.[0] || {};
+  const hexFlsId = String(row.hex_fls_id || "").trim();
+  const funcomId = String(row.funcom_id || "").trim();
+  if (!/^[A-Fa-f0-9]{16,64}$/.test(hexFlsId)) throw new Error("Care Package welcome whisper cannot be sent: Server sender hex FLS ID was not resolved from the database");
+  if (!funcomId) throw new Error("Care Package welcome whisper cannot be sent: Server sender Funcom ID was not resolved from the database");
+  return {
+    ...CARE_PACKAGE_SERVER_PERSONA,
+    hexFlsId,
+    funcomId
+  };
+}
+
+async function isWritableDuneRelation(db, table) {
+  const result = await db.query(`
+    select table_type
+    from information_schema.tables
+    where table_schema = 'dune' and table_name = $1`, [table]);
+  return String(result.rows?.[0]?.table_type || "").toUpperCase() === "BASE TABLE";
 }
 
 async function tableColumns(db, table) {
@@ -542,10 +648,16 @@ async function tableColumns(db, table) {
   return new Set((result.rows || []).map((row) => row.column_name));
 }
 
-async function upsertDuneRow(db, table, entries, conflictColumn) {
+async function upsertDuneRow(db, table, entries, conflictColumn, rawSqlValues = {}) {
   const columns = entries.map(([name]) => name);
-  const values = entries.map(([, value]) => value);
-  const placeholders = entries.map((_, index) => `$${index + 1}`);
+  const values = [];
+  const placeholders = entries.map(([name, value]) => {
+    const parameterValue = Object.prototype.hasOwnProperty.call(rawSqlValues, name) ? rawSqlValues[name] : value?.value ?? value;
+    values.push(parameterValue);
+    const placeholder = `$${values.length}`;
+    if (value && typeof value === "object" && value.rawSql) return value.rawSql.replace("$VALUE", placeholder);
+    return placeholder;
+  });
   const updates = columns
     .filter((column) => column !== conflictColumn)
     .map((column) => `${quoteIdentifier(column)} = excluded.${quoteIdentifier(column)}`);

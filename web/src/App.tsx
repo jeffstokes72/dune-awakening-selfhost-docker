@@ -2443,6 +2443,7 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
   const [kitSaveResult, setKitSaveResult] = useState<HomeTaskResult | null>(null);
   const [packageCreateResult, setPackageCreateResult] = useState<HomeTaskResult | null>(null);
   const [autoGrantResult, setAutoGrantResult] = useState<HomeTaskResult | null>(null);
+  const [manualGrantResult, setManualGrantResult] = useState<HomeTaskResult | null>(null);
   const [newKitName, setNewKitName] = useState("");
   const [newAutoRule, setNewAutoRule] = useState<{ kitId: string; grantWhen: StarterKitAutoGrantRule["grantWhen"]; lastSeenDays: number }>({ kitId: "starter-kit-v1", grantWhen: "first_online", lastSeenDays: 30 });
   const [expandedRuleIds, setExpandedRuleIds] = useState<Record<string, boolean>>({});
@@ -2487,6 +2488,15 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
     const timer = window.setTimeout(() => setAutoGrantResult(null), 5000);
     return () => window.clearTimeout(timer);
   }, [autoGrantResult]);
+  useEffect(() => {
+    if (!output || !outputScope) return undefined;
+    const timer = window.setTimeout(() => {
+      setOutput("");
+      setTechnicalOutput("");
+      setOutputScope("");
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [output, outputScope]);
   function nextConfig(source = config): StarterKitConfig {
     const sourceActiveKit = starterKitActiveKit(source);
     return {
@@ -2621,9 +2631,9 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
   function toggleRuleEligible(ruleId: string) {
     const nextOpen = !expandedRuleIds[ruleId];
     setExpandedRuleIds({ ...expandedRuleIds, [ruleId]: nextOpen });
-    if (!nextOpen || eligibleByRule[ruleId]) return;
+    if (!nextOpen) return;
     run(async () => {
-      const result = await starterKitApi.eligible(ruleId);
+      const result = await starterKitApi.eligible(ruleId, true);
       setEligibleByRule((current) => ({ ...current, [ruleId]: result.rows || [] }));
     });
   }
@@ -2656,7 +2666,8 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
   const selected = players.find((player) => String(player.actor_id || player.player_pawn_id || "") === selectedPlayer) || null;
   const grantPlayerId = manualPlayerId.trim() || String(selected?.action_player_id || "");
   const selectedLabel = selected ? `${selected.character_name || "Unknown"} (${selected.online_status || "unknown"}) - actor ${selected.actor_id || "-"} - admin ${selected.action_player_id || "-"}` : "";
-  const historyRows = starterKitHistoryRows(history).slice(0, 10);
+  const manualGrantTargetName = String(selected?.character_name || grantPlayerId || "selected player");
+  const historyRows = starterKitHistoryRows(history).filter((row) => String(row.status || "").toLowerCase() !== "skipped").slice(0, 10);
   return <section className="panel">
     <div className="panel-title"><h2>Care Package</h2></div>
     <div className="action-sections">
@@ -2747,6 +2758,9 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
           <div className="settings-tabs" role="tablist" aria-label="Care Package grants">
             <button className={starterGrantTab === "auto" ? "active" : ""} role="tab" aria-selected={starterGrantTab === "auto"} onClick={() => setStarterGrantTab("auto")}>Auto Grant</button>
             <button className={starterGrantTab === "manual" ? "active" : ""} role="tab" aria-selected={starterGrantTab === "manual"} onClick={() => setStarterGrantTab("manual")}>Manual Grant</button>
+            {manualGrantResult && <span className="inline-task-result result-running">
+              <strong className="loading-dots">{manualGrantResult.title}</strong>
+            </span>}
           </div>
           {autoGrantResult && <span className={`inline-task-result result-${autoGrantResult.status === "succeeded" ? "ok" : autoGrantResult.status === "failed" ? "fail" : "running"}`}>
             <strong className={autoGrantResult.status === "running" ? "loading-dots" : ""}>{autoGrantResult.title}</strong>
@@ -2766,12 +2780,13 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
               const kit = config.kits.find((entry) => entry.id === rule.kitId);
               const ruleEligible = eligibleByRule[rule.id] || [];
               const expanded = Boolean(expandedRuleIds[rule.id]);
+              const showEligibility = rule.grantWhen === "last_seen";
               return <article className="starter-auto-rule" key={rule.id}>
                 <button className={`starter-rule-toggle ${rule.enabled ? "enabled" : "disabled"}`} onClick={() => updateAutoGrantRule(rule.id, { enabled: !rule.enabled })}>{rule.enabled ? "Enabled" : "Disabled"}</button>
                 <span className="starter-rule-summary">Grants {starterKitGrantSummary(kit)} based on {starterKitConditionLabel(rule)}</span>
             <button className="icon-toggle-button danger starter-rule-delete" aria-label="Delete Auto Grant rule" title="Delete" onClick={() => deleteAutoGrantRule(rule.id)}><X size={18} /></button>
-                <button className={`icon-toggle-button ${expanded ? "active" : ""}`} aria-label={expanded ? "Collapse Eligibility" : "Expand Eligibility"} title={expanded ? "Collapse" : "Expand"} onClick={() => toggleRuleEligible(rule.id)}>{expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>
-                {expanded && <div className="starter-rule-eligible"><h5>Eligibility</h5>{ruleEligible.length ? <DataTable rows={starterKitEligibleRows(ruleEligible)} /> : <div className="empty starter-history-empty">No eligible players for this rule right now.</div>}</div>}
+                {showEligibility && <button className={`icon-toggle-button ${expanded ? "active" : ""}`} aria-label={expanded ? "Collapse Eligibility" : "Expand Eligibility"} title={expanded ? "Collapse" : "Expand"} onClick={() => toggleRuleEligible(rule.id)}>{expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>}
+                {showEligibility && expanded && <div className="starter-rule-eligible"><h5>Eligibility</h5>{ruleEligible.length ? <DataTable rows={starterKitEligibleRows(ruleEligible)} /> : <div className="empty starter-history-empty">No eligible players for this rule right now.</div>}</div>}
               </article>;
             })}
           </div>
@@ -2784,7 +2799,21 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
                 {String(player.character_name || "Unknown")} - {String(player.online_status || "unknown")} - actor {String(player.actor_id || "-")} - admin {String(player.action_player_id || "missing")}
               </option>)}
             </select></label>
-            <button disabled={!grantPlayerId || !manualKit.id} onClick={() => run(async () => { if (window.confirm(`Grant ${manualKit.name} to ${selectedLabel || grantPlayerId}?`)) showGrantResult("grant", await starterKitApi.grant(grantPlayerId, "GRANT STARTER KIT", manualKit.id)); })}>Grant Package</button>
+            <button disabled={!grantPlayerId || !manualKit.id || manualGrantResult?.status === "running"} onClick={() => run(async () => {
+              if (!window.confirm(`Grant ${manualKit.name} to ${selectedLabel || grantPlayerId}?`)) return;
+              setManualGrantResult({ status: "running", title: `Granting ${manualKit.name || "package"} to ${manualGrantTargetName}...` });
+              try {
+                showGrantResult("grant", await starterKitApi.grant(grantPlayerId, "GRANT STARTER KIT", manualKit.id));
+                setHistory((await starterKitApi.history()).rows || []);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setOutputScope("grant");
+                setOutput(`FAIL: ${formatStarterKitError(message)}`);
+                setTechnicalOutput(message);
+              } finally {
+                setManualGrantResult(null);
+              }
+            })}>Grant Package</button>
           </div>
           {selected && !selected.action_player_id && <p className="danger-note">Selected player has no Admin action ID, so CLI-backed grants are disabled.</p>}
           <details className="technical-details">
@@ -2798,11 +2827,22 @@ function StarterKitPanel({ onError }: { onError: (text: string) => void }) {
       <section className="action-section">
         <div className="panel-title">
           <h4>Grant History</h4>
-          <button onClick={() => run(async () => setHistory((await starterKitApi.history()).rows || []))}>Refresh</button>
+          <button disabled={!historyRows.length} onClick={() => run(async () => {
+            if (!window.confirm("Clear Care Package grant history?")) return;
+            await starterKitApi.clearHistory();
+            setHistory([]);
+            setOutputScope("history");
+            setOutput("");
+            setTechnicalOutput("");
+          })}>Clear</button>
         </div>
         <StarterKitResult output={outputScope === "history" ? output : ""} technicalOutput={outputScope === "history" ? technicalOutput : ""} />
         <div className="starter-history-table">
-          {historyRows.length ? <DataTable rows={historyRows} columns={["timestamp", "character_name", "action_player_id", "source", "status", "summary"]} action={(row) => String(row.status || "").toLowerCase() === "failed" ? <button onClick={() => run(async () => { if (window.confirm(`Retry Care Package grant ${row.id}?`)) showGrantResult("history", await starterKitApi.retry(String(row.id), "RETRY STARTER KIT")); })}>Retry</button> : null} /> : <div className="empty starter-history-empty">Grant history is clear. Care Package grants will appear here after they run.</div>}
+          {historyRows.length ? <DataTable rows={historyRows} columns={["timestamp", "character_name", "action_player_id", "source", "status", "summary"]} action={(row) => String(row.status || "").toLowerCase() === "failed" ? <button onClick={() => run(async () => {
+            if (!window.confirm(`Retry Care Package grant ${row.id}?`)) return;
+            showGrantResult("history", await starterKitApi.retry(String(row.id), "RETRY STARTER KIT"));
+            setHistory((await starterKitApi.history()).rows || []);
+          })}>Retry</button> : null} /> : <div className="empty starter-history-empty">No Care Package grants have been recorded yet.</div>}
         </div>
       </section>
     </div>

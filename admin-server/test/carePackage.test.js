@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { enableStarterKit, grantEligibleStarterKits, grantStarterKit, runStarterKitAutoScan, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitEligiblePlayers, validateStarterKitConfig } from "../src/carePackage.js";
+import { clearStarterKitHistory, enableStarterKit, grantEligibleStarterKits, grantStarterKit, runStarterKitAutoScan, saveStarterKitConfig, starterKitCapabilities, starterKitConfig, starterKitEligiblePlayers, starterKitHistory, validateStarterKitConfig } from "../src/carePackage.js";
 
 test("starter kit is disabled by default and reports manual capability", () => {
   const config = tempConfig();
@@ -123,6 +123,25 @@ test("starter kit manual repeat grants are allowed while automatic repeats stay 
   }
 });
 
+test("starter kit eligibility is character-aware for new characters on the same account", async () => {
+  const config = tempConfig();
+  try {
+    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [] });
+    await grantStarterKit(config, "Account#1", { confirmation: "GRANT STARTER KIT", source: "auto", actorId: 101, characterName: "Existing" });
+    const result = starterKitEligiblePlayers(config, [
+      { actor_id: 101, character_name: "Existing", action_player_id: "Account#1", online_status: "Online" },
+      { actor_id: 102, character_name: "New Character", action_player_id: "Account#1", online_status: "Online" }
+    ]);
+    assert.equal(result.rows.find((row) => row.character_name === "Existing").eligible, false);
+    assert.equal(result.rows.find((row) => row.character_name === "New Character").eligible, true);
+    await assert.rejects(() => grantStarterKit(config, "Account#1", { confirmation: "GRANT STARTER KIT", source: "auto", actorId: 101, characterName: "Existing" }), /already granted/);
+    const nextCharacterGrant = await grantStarterKit(config, "Account#1", { confirmation: "GRANT STARTER KIT", source: "auto", actorId: 102, characterName: "New Character" });
+    assert.equal(nextCharacterGrant.status, "granted");
+  } finally {
+    rmSync(config.repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("starter kit supports separate manual and auto-grant kit selection", async () => {
   const config = tempConfig();
   try {
@@ -176,6 +195,57 @@ test("starter kit auto scan supports multiple enabled rules with different condi
   }
 });
 
+test("last seen eligibility preview includes stale offline players but auto scan waits for online", async () => {
+  const config = tempConfig();
+  try {
+    saveStarterKitConfig(config, {
+      enabled: true,
+      autoGrantEnabled: true,
+      kits: [{ id: "back-again", name: "Back Again", xp: 25, items: [] }],
+      activeKitId: "back-again",
+      autoGrantKitId: "back-again",
+      autoGrantRules: [{ id: "last-seen-rule", enabled: true, kitId: "back-again", grantWhen: "last_seen", lastSeenDays: 30 }]
+    });
+    const players = [{ actor_id: 2, character_name: "Offline", action_player_id: "Offline#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" }];
+    const preview = starterKitEligiblePlayers(config, players, { ruleId: "last-seen-rule" });
+    assert.equal(preview.rows[0].eligible, true);
+    const scan = await runStarterKitAutoScan(config, players);
+    assert.equal(scan.granted, 0);
+    assert.equal(scan.skipped, 1);
+    assert.equal(scan.results[0].reason, "Not currently online");
+  } finally {
+    rmSync(config.repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("last seen eligible-only preview removes players after they receive the package", async () => {
+  const config = tempConfig();
+  try {
+    saveStarterKitConfig(config, {
+      enabled: true,
+      autoGrantEnabled: true,
+      kits: [{ id: "back-again", name: "Back Again", xp: 25, items: [] }],
+      activeKitId: "back-again",
+      autoGrantKitId: "back-again",
+      autoGrantRules: [{ id: "last-seen-rule", enabled: true, kitId: "back-again", grantWhen: "last_seen", lastSeenDays: 30 }]
+    });
+    await grantStarterKit(config, "Granted#1", {
+      confirmation: "GRANT STARTER KIT",
+      source: "auto",
+      kitId: "back-again",
+      actorId: 1,
+      characterName: "Granted"
+    });
+    const preview = starterKitEligiblePlayers(config, [
+      { actor_id: 1, character_name: "Granted", action_player_id: "Granted#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" },
+      { actor_id: 2, character_name: "Waiting", action_player_id: "Waiting#1", online_status: "Offline", last_seen: "2026-01-01T00:00:00.000Z" }
+    ], { ruleId: "last-seen-rule", onlyEligible: true });
+    assert.deepEqual(preview.rows.map((row) => row.character_name), ["Waiting"]);
+  } finally {
+    rmSync(config.repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("starter kit grant all successes records granted status and summary", async () => {
   const config = tempConfig();
   try {
@@ -200,14 +270,16 @@ test("care package welcome message is sent as a grant action", async () => {
       items: [],
       kits: [{ id: "starter-kit-v1", name: "Care Package", xp: 10, items: [], welcomeMessage: "Welcome" }]
     });
+    const db = fakePersonaDb();
     const result = await grantStarterKit(config, "RedBlink#75570", {
       confirmation: "GRANT STARTER KIT",
       characterName: "RedBlink",
       funcomId: "RedBlink#75570"
-    }, { db: fakePersonaDb() });
+    }, { db });
     assert.equal(result.status, "granted");
     assert.equal(result.results.find((row) => row.operation === "carePackageWelcomeWhisper")?.ok, true);
     assert.match(result.summary, /2 succeeded, 0 failed/);
+    assert.ok(db.queries.some((query) => /insert into dune\."encrypted_accounts"/.test(query.text)));
   } finally {
     rmSync(config.repoRoot, { recursive: true, force: true });
   }
@@ -288,6 +360,26 @@ test("starter kit bulk grant returns per-player granted skipped and failed rows"
   }
 });
 
+test("starter kit history hides skipped rows and can be cleared", async () => {
+  const config = tempConfig();
+  try {
+    saveStarterKitConfig(config, { enabled: true, version: "starter-kit-v1", xp: 10, items: [] });
+    await grantStarterKit(config, "Existing#1", { confirmation: "GRANT STARTER KIT" });
+    await grantEligibleStarterKits(config, [
+      { actor_id: 1, character_name: "Existing", action_player_id: "Existing#1", online_status: "Online" },
+      { actor_id: 2, character_name: "New", action_player_id: "New#1", online_status: "Online" }
+    ], { confirmation: "GRANT STARTER KIT TO ELIGIBLE PLAYERS" });
+    const visibleHistory = starterKitHistory(config).rows;
+    assert.equal(visibleHistory.some((row) => row.status === "skipped"), false);
+    assert.equal(visibleHistory.some((row) => row.character_name === "New"), true);
+    const cleared = clearStarterKitHistory(config);
+    assert.equal(cleared.ok, true);
+    assert.deepEqual(starterKitHistory(config).rows, []);
+  } finally {
+    rmSync(config.repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("starter kit auto scan only grants when enabled and players have action ids", async () => {
   const config = tempConfig();
   try {
@@ -328,8 +420,13 @@ function writeCatalog(config) {
 function fakePersonaDb() {
   const columns = {
     accounts: ["id", "user", "funcom_id"],
-    encrypted_accounts: ["id", "encrypted_funcom_id"],
+    encrypted_accounts: ["id", "user", "encrypted_funcom_id", "takeoverable"],
     player_state: ["account_id", "character_name"]
+  };
+  const tableTypes = {
+    accounts: "VIEW",
+    encrypted_accounts: "BASE TABLE",
+    player_state: "VIEW"
   };
   return {
     queries: [],
@@ -337,6 +434,12 @@ function fakePersonaDb() {
       this.queries.push({ text, params });
       if (/information_schema\.columns/.test(text)) {
         return { rows: (columns[params[0]] || []).map((column_name) => ({ column_name })) };
+      }
+      if (/information_schema\.tables/.test(text)) {
+        return { rows: tableTypes[params[0]] ? [{ table_type: tableTypes[params[0]] }] : [] };
+      }
+      if (/from dune\.accounts/.test(text)) {
+        return { rows: [{ hex_fls_id: "A5C0DE5E12A00001", funcom_id: "Server#0001" }] };
       }
       return { rows: [], rowCount: 1 };
     }
