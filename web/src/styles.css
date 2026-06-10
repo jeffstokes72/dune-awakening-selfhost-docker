@@ -328,7 +328,51 @@ body.debug .technical-details { display: block; }
 .command-preview { color: #ffd08a; }
 .empty, .danger-note, .error, .error-banner { color: #ffc0c0; }
 .error-banner { background: #351b1b; border: 1px solid #8d3434; padding: 12px; border-radius: 6px; margin-bottom: 14px; }
-.drawer { border-left: 1px solid #302b25; padding: 12px; color: #d9c8aa; }
+.drawer { border: 1px solid #302b25; border-radius: 8px; padding: 12px; color: #d9c8aa; background: rgba(13, 15, 17, .48); }
+.inline-filter-label { display: inline-flex; align-items: center; gap: 8px; color: #ffd08a; font-weight: 700; }
+.playerAdmin_container { border: 1px solid rgba(255, 208, 138, .34); background: rgba(13, 15, 17, .72); border-radius: 8px; padding: 14px; margin: 14px 0 18px; display: grid; gap: 12px; }
+.playerAdmin_header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #302b25; padding-bottom: 10px; }
+.playerAdmin_header h3 { margin: 0; color: #ffd08a; }
+.playerAdmin_header span, .playerAdmin_container p, .playerAdmin_note { color: #ad9f89; }
+.playerAdmin_tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; overflow-x: auto; }
+.playerAdmin_tabs button { width: 100%; min-height: 58px; border-radius: 6px; border-color: #3b3329; background: #171a1d; color: #e9dcc8; font-size: 15px; font-weight: 700; white-space: nowrap; }
+.playerAdmin_tabs button.active { border-color: #c68b4a; background: rgba(198, 139, 74, .16); color: #ffd08a; }
+.playerAdmin_content { display: grid; gap: 12px; }
+.playerAdmin_box, .playerAdmin_toggle { border: 1px solid #302b25; background: #14171a; border-radius: 8px; padding: 14px; display: grid; gap: 12px; }
+.playerAdmin_box h4, .playerAdmin_section h5 { margin: 0; color: #ffd08a; }
+.playerAdmin_section { display: grid; gap: 10px; }
+.playerAdmin_actionRow, .playerAdmin_filterRow, .playerAdmin_buttonRow { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
+.playerAdmin_actionRow span { min-width: 180px; color: #e9dcc8; font-weight: 700; }
+.playerAdmin_actionRow input, .playerAdmin_actionRow select, .playerAdmin_filterRow input, .playerAdmin_filterRow select { max-width: 220px; }
+.playerAdmin_actionRow button, .playerAdmin_buttonRow button { width: auto; }
+.playerAdmin_toggle { padding: 0; overflow: hidden; }
+.playerAdmin_toggleHeader { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; justify-content: flex-start; border: 0; border-radius: 0; background: #171a1d; color: #ffd08a; }
+.playerAdmin_toggleHeader span { font-weight: 700; }
+.playerAdmin_toggleBody { display: grid; gap: 10px; padding: 14px; border-top: 1px solid #302b25; }
+.playerAdmin_tableWrap { overflow: auto; max-height: 360px; border: 1px solid #302b25; border-radius: 8px; }
+.playerAdmin_table { width: max-content; min-width: 100%; border-collapse: collapse; }
+.playerAdmin_table th, .playerAdmin_table td { border-bottom: 1px solid #302b25; padding: 9px 10px; text-align: left; vertical-align: middle; white-space: nowrap; }
+.playerAdmin_table th { color: #ffd08a; background: #171a1d; position: sticky; top: 0; }
+.playerAdmin_actionCell { display: flex; align-items: center; gap: 10px; }
+.playerAdmin_note.danger { color: #ff9c8f; }
+.playerAdmin_cardGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.playerAdmin_card { border: 1px solid #302b25; background: #101316; border-radius: 8px; padding: 12px; display: grid; gap: 6px; min-height: 96px; }
+.playerAdmin_card strong { color: #e9dcc8; }
+.playerAdmin_card span { color: #ad9f89; }
+.playerAdmin_skillCard { min-height: 132px; }
+.playerAdmin_skillCard.dirty { border-color: #c68b4a; background: rgba(198, 139, 74, .08); }
+.playerAdmin_skillCardHeader { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+.playerAdmin_skillCardHeader span { color: #ffd08a; font-weight: 700; white-space: nowrap; }
+.playerAdmin_skillCard code { color: #8f826f; font-size: 11px; white-space: normal; word-break: break-word; }
+.playerAdmin_rankBars { display: flex; align-items: center; gap: 6px; min-height: 28px; }
+.playerAdmin_rankBars button { width: 34px; height: 12px; min-height: 12px; padding: 0; border-radius: 3px; border: 1px solid #5a4a35; background: #1c2024; }
+.playerAdmin_rankBars button.active { background: #c68b4a; border-color: #ffd08a; box-shadow: 0 0 0 1px rgba(255, 208, 138, .12); }
+.playerAdmin_rankBars button:disabled { opacity: .45; cursor: not-allowed; }
+.playerAdmin_saveBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid #302b25; padding-top: 12px; }
+.playerAdmin_saveBar button { width: auto; }
+.playerAdmin_journeyName { min-width: 220px; }
+.playerAdmin_itemsTable { margin-top: 2px; }
+.playerAdmin_empty { padding: 10px 2px; color: #d9c8aa; }
 .gauge { display: grid; gap: 4px; background: #171a1d; border: 1px solid #302b25; border-radius: 8px; padding: 12px; }
 .service-table { display: grid; gap: 10px; margin-top: 14px; }
 .service-actions, .service-card .service-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
@@ -369,6 +413,7 @@ tr.clickable:hover { background: rgba(198, 139, 74, .12); }
   .home-backdrop { inset: 0; }
   .grid, .two-col { grid-template-columns: 1fr; }
   .health-grid, .health-grid-compact { grid-template-columns: 1fr; }
+  .playerAdmin_tabs { grid-template-columns: repeat(6, minmax(116px, 1fr)); }
   .live-map-layout { grid-template-columns: 1fr; }
   .live-map-frame { height: 62vh; min-height: 420px; }
   .live-map-stats { grid-template-columns: 1fr; }

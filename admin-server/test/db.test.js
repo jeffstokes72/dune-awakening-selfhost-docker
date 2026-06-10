@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assertIdentifier, discoverDbConfig, isReadOnlySql, quoteQualified, redactDbError } from "../src/db.js";
-import { addCurrency, addFactionReputation, deleteInventoryItem, giveItemToStorage, listPlayers, liveMapPlayers, liveMapServices, tablePreview, UnsupportedCapabilityError } from "../src/duneDb.js";
+import { addCurrency, addFactionReputation, addIntel, completeJourneyNode, completeTutorial, deleteInventoryItem, giveItemToStorage, listPlayers, liveMapPlayers, liveMapServices, playerCraftingRecipes, playerJourney, playerResearchItems, resetJourneyNode, resetTutorial, tablePreview, unlockCraftingRecipe, unlockResearchItem, UnsupportedCapabilityError } from "../src/duneDb.js";
 
 test("discovers RedBlink Postgres defaults and env overrides", () => {
   assert.deepEqual(discoverDbConfig({}), {
@@ -163,6 +163,224 @@ test("faction mutation clamps reputation and syncs actor component JSON", async 
   assert.ok(calls.some((call) => call.text.includes("FactionPlayerComponent,m_FactionDataArray")));
 });
 
+test("intel mutation updates TechKnowledge points on the player actor", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    intelRows: [{ intel: 10 }]
+  });
+  const result = await addIntel(db, 123, { amount: 25 });
+  assert.equal(result.oldValue, 10);
+  assert.equal(result.newValue, 35);
+  assert.ok(calls.some((call) => call.text.includes("TechKnowledgePlayerComponent") && call.text.includes("jsonb_set") && call.values[1] === 35));
+});
+
+test("crafting recipe listing uses verified BaseRecipeId names and player unlock status", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    craftingListRows: [
+      { recipe_id: "T2_Material_Silicone_Recipe", source: "SchematicPickup", quality_level: 0, unlocked: true },
+      { recipe_id: "BuggyEngine_4_Recipe", source: "SchematicPickup", quality_level: 0, unlocked: false }
+    ]
+  });
+  const result = await playerCraftingRecipes(db, 123);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0].recipeId, "T2_Material_Silicone_Recipe");
+  assert.equal(result.rows[0].displayName, "T2 Material Silicone");
+  assert.equal(result.rows[0].unlocked, true);
+  assert.equal(result.rows[1].category, "Vehicles");
+  assert.ok(calls.some((call) => call.text.includes("CraftingRecipesLibraryActorComponent") && call.text.includes("all_recipes")));
+});
+
+test("crafting recipe unlock appends exact recipe object without dropping existing recipes", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    recipeExists: true,
+    currentCraftingRecipes: [{ BaseRecipeId: { Name: "HealthPackRecipe" }, m_Source: "SchematicPickup" }]
+  });
+  const result = await unlockCraftingRecipe(db, 123, { recipeId: "BuggyEngine_4_Recipe" });
+  assert.equal(result.recipeId, "BuggyEngine_4_Recipe");
+  assert.equal(result.alreadyUnlocked, false);
+  const update = calls.find((call) => call.text.includes("CraftingRecipesLibraryActorComponent,m_KnownItemRecipes") && call.text.includes("update dune.actors"));
+  assert.ok(update);
+  const recipes = JSON.parse(update.values[1]);
+  assert.equal(recipes.length, 2);
+  assert.equal(recipes[0].BaseRecipeId.Name, "HealthPackRecipe");
+  assert.equal(recipes[1].BaseRecipeId.Name, "BuggyEngine_4_Recipe");
+  assert.equal(recipes[1].m_Source, "SchematicPickup");
+});
+
+test("crafting recipe unlock does not duplicate an already unlocked recipe", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    recipeExists: true,
+    currentCraftingRecipes: [{ BaseRecipeId: { Name: "BuggyEngine_4_Recipe" }, m_Source: "SchematicPickup" }]
+  });
+  const result = await unlockCraftingRecipe(db, 123, { recipeId: "BuggyEngine_4_Recipe" });
+  assert.equal(result.alreadyUnlocked, true);
+  assert.equal(calls.some((call) => call.text.includes("update dune.actors") && call.text.includes("m_KnownItemRecipes")), false);
+});
+
+test("research listing uses TechKnowledge item keys and selected player state", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    researchListRows: [
+      { item_key: "RCP_HealthPackRecipe", unlocked_state: "Purchased", is_new: false },
+      { item_key: "DA_GRP_SandbikePack", unlocked_state: "NotPurchased", is_new: true },
+      { item_key: "DA_GRP_BuggyPack", unlocked_state: "NotPurchased", is_new: true },
+      { item_key: "RCP_RecyclerDUMMY_UniqueBikeBoost", unlocked_state: "NotPurchased", is_new: true }
+    ]
+  });
+  const result = await playerResearchItems(db, 123);
+  assert.equal(result.rows.length, 4);
+  assert.equal(result.rows[0].itemKey, "RCP_HealthPackRecipe");
+  assert.equal(result.rows[0].type, "Recipe");
+  assert.equal(result.rows[0].unlocked, true);
+  assert.equal(result.rows[1].type, "Group");
+  assert.equal(result.rows[2].category, "Vehicles");
+  assert.equal(result.rows[2].productGroup, "Copper Products");
+  assert.equal(result.rows[3].category, "Uniques");
+  assert.equal(result.rows[3].productGroup, "Copper Products");
+  assert.ok(calls.some((call) => call.text.includes("TechKnowledgePlayerComponent") && call.text.includes("all_research")));
+});
+
+test("research unlock updates TechKnowledge and materializes verified recipe", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    researchExists: true,
+    currentResearchItems: [{ ItemKey: "RCP_HealthPackRecipe", bIsNewEntry: true, UnlockedState: "NotPurchased" }],
+    recipeExists: true,
+    currentCraftingRecipes: []
+  });
+  const result = await unlockResearchItem(db, 123, { itemKey: "RCP_HealthPackRecipe" });
+  assert.equal(result.alreadyUnlocked, false);
+  assert.equal(result.recipeId, "HealthPackRecipe");
+  assert.equal(result.recipeMaterialized, true);
+  const researchUpdate = calls.find((call) => call.text.includes("TechKnowledgePlayerComponent,m_TechKnowledge,m_TechKnowledgeData") && call.text.includes("update dune.actors"));
+  assert.ok(researchUpdate);
+  const items = JSON.parse(researchUpdate.values[1]);
+  assert.deepEqual(items[0], { ItemKey: "RCP_HealthPackRecipe", bIsNewEntry: false, UnlockedState: "Purchased" });
+  const recipeUpdate = calls.find((call) => call.text.includes("CraftingRecipesLibraryActorComponent,m_KnownItemRecipes") && call.text.includes("update dune.actors"));
+  assert.ok(recipeUpdate);
+  assert.equal(JSON.parse(recipeUpdate.values[1])[0].BaseRecipeId.Name, "HealthPackRecipe");
+});
+
+test("research unlock appends missing verified key without duplicating existing entries", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    researchExists: true,
+    currentResearchItems: [{ ItemKey: "DA_GRP_SandbikePack", bIsNewEntry: true, UnlockedState: "NotPurchased" }],
+    recipeExists: false
+  });
+  const result = await unlockResearchItem(db, 123, { itemKey: "BLD_Windtrap_Patent" });
+  assert.equal(result.recipeId, "");
+  const researchUpdate = calls.find((call) => call.text.includes("TechKnowledgePlayerComponent,m_TechKnowledge,m_TechKnowledgeData") && call.text.includes("update dune.actors"));
+  assert.ok(researchUpdate);
+  const items = JSON.parse(researchUpdate.values[1]);
+  assert.equal(items.length, 2);
+  assert.deepEqual(items[1], { ItemKey: "BLD_Windtrap_Patent", bIsNewEntry: false, UnlockedState: "Purchased" });
+});
+
+test("journey listing groups story contract codex and tutorial rows with player status", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    codexRows: [{ story_node_id: "DA_Dunipedia_KnownUniverse" }],
+    journeyStateRows: [
+      { story_node_id: "DA_Story.Root", is_complete: false, is_revealed: true, has_pending_reward: false },
+      { story_node_id: "DA_CT_Arrakeen.Contract", is_complete: true, is_revealed: true, has_pending_reward: false },
+      { story_node_id: "DA_Dunipedia_KnownUniverse", is_complete: true, is_revealed: true, has_pending_reward: false }
+    ],
+    tutorialRows: [{ id: 7, name: "AttackTutorial", tutorial_state: 2 }]
+  });
+  const result = await playerJourney(db, 123, { journey_node_tags: { "DA_Story.Root": ["Story.Tag"], "DA_Story.Root.Child": ["Story.Child"], "DA_CT_Arrakeen.Contract": ["Contract.Tag"] } });
+  assert.equal(result.rows.story.length, 2);
+  assert.equal(result.rows.story[1].parentId, "DA_Story.Root");
+  assert.equal(result.rows.contract[0].status, "Complete");
+  assert.equal(result.rows.codex[0].category, "Codex");
+  assert.equal(result.rows.tutorial[0].status, "Complete");
+  assert.ok(calls.some((call) => call.text.includes("from dune.tutorials")));
+});
+
+test("journey listing includes faction contract aliases from game data", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    playerTagRows: [{ tag: "Faction.Atreides.Tier1" }]
+  });
+  const result = await playerJourney(db, 123, {
+    journey_node_tags: {},
+    contract_aliases: { Fac_Atre_Rank00_02_FacFunnel: "DA_CT_Fac_Atre_Rank00_02_FacFunnel" },
+    contract_tags: { DA_CT_Fac_Atre_Rank00_02_FacFunnel: ["Faction.Atreides.Tier1"] }
+  });
+  assert.equal(result.rows.contract.length, 1);
+  assert.equal(result.rows.contract[0].rawName, "Fac_Atre_Rank00_02_FacFunnel");
+  assert.equal(result.rows.contract[0].category, "Contract");
+  assert.equal(result.rows.contract[0].status, "Complete");
+});
+
+test("faction quest journey nodes stay under story instead of contracts", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls);
+  const result = await playerJourney(db, 123, {
+    journey_node_tags: { "DA_FQ_ClimbTheRanks.Rank5To20.MeetSponsor.TalkToSponsor": ["DialogueFlags.Factions.CannotBetray"] },
+    contract_aliases: {},
+    contract_tags: {}
+  });
+  assert.equal(result.rows.story.length, 1);
+  assert.equal(result.rows.contract.length, 0);
+  assert.equal(result.rows.story[0].category, "Story");
+});
+
+test("main quest nodes with contract in the name stay under story", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls);
+  const result = await playerJourney(db, 123, {
+    journey_node_tags: { "DA_MQ_ANewBeginning.Reach Civilization.Tradepost.PickupContract": ["Contract.UniqueInstance.ZantaraBounty.Taken"] },
+    contract_aliases: {},
+    contract_tags: {}
+  });
+  assert.equal(result.rows.story.length, 1);
+  assert.equal(result.rows.contract.length, 0);
+  assert.equal(result.rows.story[0].category, "Story");
+});
+
+test("journey complete updates subtree and applies tags", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, {
+    journeyUpdateRows: 2,
+    reputationRows: [{ reputation_amount: 0 }],
+    factionRows: [{ faction_id: 1, reputation_amount: 100 }]
+  });
+  const result = await completeJourneyNode(db, 123, { nodeId: "DA_Story.Root" }, { journey_node_tags: { "DA_Story.Root": ["Story.Tag", "Faction.Atreides.Tier1"], "DA_Story.Root.Child": ["Child.Tag"] } });
+  assert.equal(result.updatedRows, 2);
+  assert.equal(result.tagsApplied, 3);
+  assert.ok(calls.some((call) => call.text.includes("story_node_id = $2 or story_node_id like $2 || '.%'") && call.values[1] === "DA_Story.Root"));
+  assert.ok(calls.some((call) => call.text.includes("dune.update_player_tags") && call.values[1].includes("Child.Tag")));
+  assert.ok(calls.some((call) => call.text.includes("set_player_faction_reputation") && call.values[2] === 100));
+});
+
+test("journey reset clears subtree completion and removes tags", async () => {
+  const calls = [];
+  const db = fakeMutationDb(calls, { journeyUpdateRows: 1 });
+  const result = await resetJourneyNode(db, 123, { nodeId: "DA_Story.Root" }, { journey_node_tags: { "DA_Story.Root": ["Story.Tag"], "DA_Story.Root.Child": ["Child.Tag"] } });
+  assert.equal(result.updatedRows, 1);
+  assert.equal(result.tagsRemoved, 2);
+  assert.ok(calls.some((call) => call.text.includes("complete_condition_state = 'false'::jsonb")));
+  assert.ok(calls.some((call) => call.text.includes("dune.update_player_tags") && call.values[1].includes("Child.Tag")));
+});
+
+test("tutorial complete and reset use player controller tutorial records", async () => {
+  const completeCalls = [];
+  const completeDb = fakeMutationDb(completeCalls, { tutorialExists: true });
+  const complete = await completeTutorial(completeDb, 123, { tutorialId: 7 });
+  assert.equal(complete.state, 2);
+  assert.ok(completeCalls.some((call) => call.text.includes("create_or_update_tutorial_entry") && call.values[0] === 55 && call.values[1] === 7));
+
+  const resetCalls = [];
+  const resetDb = fakeMutationDb(resetCalls, { tutorialDeleteRows: 1 });
+  const reset = await resetTutorial(resetDb, 123, { tutorialId: 7 });
+  assert.equal(reset.deletedRows, 1);
+  assert.ok(resetCalls.some((call) => call.text.includes("delete from dune.tutorial_per_player") && call.values[0] === 55 && call.values[1] === 7));
+});
+
 function fakeMutationDb(calls, fixtures = {}) {
   const db = {
     async query(text, values = []) {
@@ -178,6 +396,24 @@ function fakeMutationDb(calls, fixtures = {}) {
             : ["inventory_id", "template_id", "stack_size", "quality_level", "position_index", "stats"];
         return { rows: names.map((column_name) => ({ column_name })) };
       }
+      if (text.includes("TechKnowledgePlayerComponent") && text.includes("all_research")) return { rows: fixtures.researchListRows || [] };
+      if (text.includes("TechKnowledgePlayerComponent") && text.includes("select exists")) return { rows: [{ exists: Boolean(fixtures.researchExists) }] };
+      if (text.includes("TechKnowledgePlayerComponent") && text.includes("m_TechKnowledgeData") && text.includes("for update")) return { rows: fixtures.currentResearchItems === null ? [] : [{ items: fixtures.currentResearchItems || [] }] };
+      if (text.includes("TechKnowledgePlayerComponent,m_TechKnowledge,m_TechKnowledgeData") && text.includes("update dune.actors")) return { rows: [{ ok: true }] };
+      if (text.includes("CraftingRecipesLibraryActorComponent") && text.includes("all_recipes")) return { rows: fixtures.craftingListRows || [] };
+      if (text.includes("CraftingRecipesLibraryActorComponent") && text.includes("select exists")) return { rows: [{ exists: Boolean(fixtures.recipeExists) }] };
+      if (text.includes("CraftingRecipesLibraryActorComponent") && text.includes("for update")) return { rows: fixtures.currentCraftingRecipes === null ? [] : [{ recipes: fixtures.currentCraftingRecipes || [] }] };
+      if (text.includes("CraftingRecipesLibraryActorComponent,m_KnownItemRecipes") && text.includes("update dune.actors")) return { rows: [{ ok: true }] };
+      if (text.includes("story_node_id like 'DA_Dunipedia_%'")) return { rows: fixtures.codexRows || [] };
+      if (text.includes("from dune.journey_story_node") && text.includes("where account_id = $1")) return { rows: fixtures.journeyStateRows || [] };
+      if (text.includes("select tag from dune.player_tags")) return { rows: fixtures.playerTagRows || [] };
+      if (text.includes("update dune.journey_story_node")) return { rows: [], rowCount: fixtures.journeyUpdateRows ?? 0 };
+      if (text.includes("insert into dune.journey_story_node")) return { rows: [{ ok: true }], rowCount: 1 };
+      if (text.includes("from dune.tutorials t")) return { rows: fixtures.tutorialRows || [] };
+      if (text.includes("select exists (select 1 from dune.tutorials")) return { rows: [{ exists: Boolean(fixtures.tutorialExists) }] };
+      if (text.includes("create_or_update_tutorial_entry")) return { rows: [{ ok: true }] };
+      if (text.includes("delete from dune.tutorial_per_player")) return { rows: [], rowCount: fixtures.tutorialDeleteRows ?? 0 };
+      if (text.includes("dune.update_player_tags")) return { rows: [{ ok: true }] };
       if (text.includes("from dune.actors a")) return { rows: [{ actor_id: 123, account_id: 44, controller_id: 55, online_status: "Offline" }] };
       if (text.includes("dune.get_solaris_id")) return { rows: [{ currency_id: 0 }] };
       if (text.includes("adjust_player_virtual_currency_balance")) return { rows: [{ ok: true }] };
@@ -186,6 +422,8 @@ function fakeMutationDb(calls, fixtures = {}) {
       if (text.includes("set_player_faction_reputation")) return { rows: [{ ok: true }] };
       if (text.includes("where actor_id = $1 and faction_id in")) return { rows: fixtures.factionRows || [] };
       if (text.includes("jsonb_set") && text.includes("FactionPlayerComponent")) return { rows: [] };
+      if (text.includes("m_TechKnowledgePoints") && text.includes("select")) return { rows: fixtures.intelRows || [] };
+      if (text.includes("m_TechKnowledgePoints") && text.includes("update")) return { rows: [{ ok: true }] };
       if (text.includes("from dune.items i") && text.includes("where i.id = $1")) return { rows: fixtures.itemRows || [] };
       if (text.includes("dune.delete_item")) return { rows: [{ ok: true }] };
       if (text.includes("from dune.inventories") && text.includes("where actor_id")) return { rows: fixtures.storageRows || [] };

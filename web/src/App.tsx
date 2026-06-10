@@ -26,6 +26,11 @@ import { SecretInput } from "./components/SecretInput";
 type Tab = "Home" | "Setup" | "Server Control" | "Services" | "Players" | "Admin Tools" | "Live Map" | "Maps" | "Care Package" | "Addons" | "Database" | "Storage" | "Backups" | "Logs" | "Updates" | "Settings";
 type HomeLoadResult = { statusLoaded: boolean; readinessLoaded: boolean; statusError: string; readinessError: string; statusText: string; readinessText: string };
 type CatalogItem = { name: string; id: string; itemId?: string; category?: string; source?: string; image?: string };
+type CraftingRecipeRow = { recipeId: string; displayName: string; category: string; source: string; qualityLevel: number; unlocked: boolean };
+type ResearchItemRow = { itemKey: string; displayName: string; category: string; productGroup: string; type: string; unlockedState: string; unlocked: boolean; isNew: boolean };
+type SkillModuleCatalogRow = { skillModule: string; category: string; id: string; maxLevel: number };
+type SkillCard = { name: string; type: string; rank: string };
+type JourneyRow = { id: string; name: string; rawName: string; category: string; depth: number; parentId: string; dependency?: string; status: string; complete: boolean; revealed?: boolean; pendingReward?: boolean; tags?: number; state?: number | null };
 type BackupResult = { status: "running" | "succeeded" | "failed"; title: string; message?: string; details?: string; tone?: "danger" | "attention" };
 type HomeTaskResult = { status: "running" | "succeeded" | "failed" | "stopped"; title: string; message?: string; details?: string };
 type DatabasePasswordState = { taskId?: string; result: HomeTaskResult | null };
@@ -1289,17 +1294,624 @@ function InlineActionResult({ result, resultKey }: { result: { key: string; tone
   return <span className="inline-action-result-wrap"><span className={`inline-action-result ${result.tone} ${result.pending ? "pending" : ""}`}>{result.text}</span></span>;
 }
 
+function CharacterAdminUI({ detail, fallback, dbPlayerId, actionPlayerId, playerName, setTask, onError, onRefresh, onClose }: { detail: Record<string, unknown> | null; fallback: Record<string, unknown>; dbPlayerId: string; actionPlayerId: string; playerName: string; setTask: (task: Task) => void; onError: (text: string) => void; onRefresh: () => void; onClose: () => void }) {
+  const playerAdmin_tabs = ["Character", "Crafting", "Research", "Skills", "Journey", "Admin"];
+  const [playerAdmin_activeTab, playerAdmin_setActiveTab] = useState("Character");
+  const [playerAdmin_openToggles, playerAdmin_setOpenToggles] = useState<Record<string, boolean>>({});
+  const [playerAdmin_craftingCategory, playerAdmin_setCraftingCategory] = useState("");
+  const [playerAdmin_researchCategory, playerAdmin_setResearchCategory] = useState("");
+  const [playerAdmin_productGroup, playerAdmin_setProductGroup] = useState("");
+  const [playerAdmin_skillSchool, playerAdmin_setSkillSchool] = useState("");
+  const [playerAdmin_waterAmount, playerAdmin_setWaterAmount] = useState("10");
+  const [playerAdmin_xpAmount, playerAdmin_setXpAmount] = useState("1000");
+  const [playerAdmin_currencyType, playerAdmin_setCurrencyType] = useState("Solari");
+  const [playerAdmin_currencyAmount, playerAdmin_setCurrencyAmount] = useState("100");
+  const [playerAdmin_intelAmount, playerAdmin_setIntelAmount] = useState("100");
+  const [playerAdmin_factionName, playerAdmin_setFactionName] = useState("Atreides");
+  const [playerAdmin_factionAmount, playerAdmin_setFactionAmount] = useState("100");
+  const [playerAdmin_selectedItem, playerAdmin_setSelectedItem] = useState<CatalogItem | null>(null);
+  const [playerAdmin_itemName, playerAdmin_setItemName] = useState("");
+  const [playerAdmin_itemId, playerAdmin_setItemId] = useState("");
+  const [playerAdmin_quantity, playerAdmin_setQuantity] = useState("1");
+  const [playerAdmin_durability, playerAdmin_setDurability] = useState("1");
+  const [playerAdmin_multiList, playerAdmin_setMultiList] = useState<{ itemName?: string; itemId?: string; image?: string; quantity: number; durability: number }[]>([]);
+  const [playerAdmin_actionResult, playerAdmin_setActionResult] = useState<{ key: string; tone: "success" | "danger" | "neutral"; text: string; pending?: boolean } | null>(null);
+  const [playerAdmin_actionLog, playerAdmin_setActionLog] = useState<Record<string, string>[]>([]);
+  const [playerAdmin_craftingRows, playerAdmin_setCraftingRows] = useState<CraftingRecipeRow[]>([]);
+  const [playerAdmin_craftingLoading, playerAdmin_setCraftingLoading] = useState(false);
+  const [playerAdmin_craftingError, playerAdmin_setCraftingError] = useState("");
+  const [playerAdmin_researchRows, playerAdmin_setResearchRows] = useState<ResearchItemRow[]>([]);
+  const [playerAdmin_researchLoading, playerAdmin_setResearchLoading] = useState(false);
+  const [playerAdmin_researchError, playerAdmin_setResearchError] = useState("");
+  const [playerAdmin_skillPointsAmount, playerAdmin_setSkillPointsAmount] = useState("10");
+  const [playerAdmin_skillCatalog, playerAdmin_setSkillCatalog] = useState<SkillModuleCatalogRow[]>([]);
+  const [playerAdmin_skillCatalogLoading, playerAdmin_setSkillCatalogLoading] = useState(false);
+  const [playerAdmin_skillCatalogError, playerAdmin_setSkillCatalogError] = useState("");
+  const [playerAdmin_skillBaseline, playerAdmin_setSkillBaseline] = useState<Record<string, number>>({});
+  const [playerAdmin_skillChanges, playerAdmin_setSkillChanges] = useState<Record<string, number>>({});
+  const [playerAdmin_journeyRows, playerAdmin_setJourneyRows] = useState<Record<string, JourneyRow[]>>({ story: [], contract: [], codex: [], tutorial: [] });
+  const [playerAdmin_journeyLoading, playerAdmin_setJourneyLoading] = useState(false);
+  const [playerAdmin_journeyError, playerAdmin_setJourneyError] = useState("");
+  const [playerAdmin_coords, playerAdmin_setCoords] = useState({ x: "", y: "", z: "", yaw: "0" });
+  const [playerAdmin_vehicleId, playerAdmin_setVehicleId] = useState("");
+  const [playerAdmin_vehicleTemplate, playerAdmin_setVehicleTemplate] = useState("");
+  const [playerAdmin_vehicleCatalog, playerAdmin_setVehicleCatalog] = useState<Record<string, string[]>>({});
+  const playerAdmin_resultTimer = useRef<number | null>(null);
+  const playerAdmin_factionIds: Record<string, number> = { Atreides: 1, Harkonnen: 2, Smuggler: 4 };
+  const playerAdmin_craftingCategories = ["Essentials", "Water Discipline", "Combat", "Construction", "Exploration", "Vehicles"];
+  const playerAdmin_canRunLiveAction = Boolean(actionPlayerId);
+  const playerAdmin_toggle = (playerAdmin_key: string) => playerAdmin_setOpenToggles((playerAdmin_current) => ({ ...playerAdmin_current, [playerAdmin_key]: !playerAdmin_current[playerAdmin_key] }));
+  function playerAdmin_showResult(key: string, text: string, tone: "success" | "danger" | "neutral" = "success", pending = false) {
+    playerAdmin_setActionResult({ key, text, tone, pending });
+    if (playerAdmin_resultTimer.current) window.clearTimeout(playerAdmin_resultTimer.current);
+    playerAdmin_resultTimer.current = null;
+    if (!pending) playerAdmin_resultTimer.current = window.setTimeout(() => playerAdmin_setActionResult(null), 5000);
+  }
+  function playerAdmin_addLog(actionType: string, target: string, amount: string, notes: string) {
+    playerAdmin_setActionLog((current) => [{ "Date / Time": new Date().toLocaleString(), Admin: "Console", "Action Type": actionType, Target: target, Amount: amount, Notes: notes }, ...current].slice(0, 25));
+  }
+  async function playerAdmin_runTask(action: () => Promise<{ task: Task }>) {
+    const response = await action();
+    const final = await waitForTaskSilently(response.task);
+    if (final.status === "succeeded") onRefresh();
+    else throw new Error(adminTaskFailureDetail(final) || playerAdmin_taskFailureMessage(final));
+  }
+  async function playerAdmin_runAction(key: string, pendingText: string, action: () => Promise<unknown>, successText: string, log: { actionType: string; target: string; amount: string }, successTone: "success" | "danger" = "success", failureText?: string | ((error: unknown) => string)) {
+    onError("");
+    playerAdmin_showResult(key, pendingText, "neutral", true);
+    try {
+      await action();
+      playerAdmin_showResult(key, successText, successTone);
+      playerAdmin_addLog(log.actionType, log.target, log.amount, "Succeeded");
+    } catch (error) {
+      const message = typeof failureText === "function" ? failureText(error) : failureText || playerAdmin_friendlyFailure(error, log.actionType, playerName);
+      playerAdmin_showResult(key, message, "danger");
+      playerAdmin_addLog(log.actionType, log.target, log.amount, `Failed: ${message}`);
+    }
+  }
+  function playerAdmin_chooseItem(item: CatalogItem | null) {
+    playerAdmin_setSelectedItem(item);
+    playerAdmin_setItemName(item?.name || "");
+    playerAdmin_setItemId(item?.itemId || item?.id || "");
+  }
+  function playerAdmin_addSelectedItem() {
+    if (!playerAdmin_selectedItem) return;
+    playerAdmin_setMultiList((current) => [...current, {
+      itemName: playerAdmin_itemName,
+      itemId: playerAdmin_itemId,
+      image: playerAdmin_selectedItem.image,
+      quantity: Number(playerAdmin_quantity) || 1,
+      durability: Number(playerAdmin_durability) || 1
+    }]);
+  }
+  async function playerAdmin_giveMultipleItems() {
+    const items = playerAdmin_multiList.length ? playerAdmin_multiList : playerAdmin_selectedItem ? [{
+      itemName: playerAdmin_itemName,
+      itemId: playerAdmin_itemId,
+      image: playerAdmin_selectedItem.image,
+      quantity: Number(playerAdmin_quantity) || 1,
+      durability: Number(playerAdmin_durability) || 1
+    }] : [];
+    if (!items.length) {
+      playerAdmin_showResult("giveMultiple", "Select at least one item before granting.", "danger");
+      return;
+    }
+    await playerAdmin_runAction(
+      "giveMultiple",
+      `Granting ${items.length} item entr${items.length === 1 ? "y" : "ies"} to ${playerName}`,
+      async () => {
+        const result = await playersApi.giveItems(actionPlayerId, items.map((item) => ({ itemName: item.itemName, itemId: item.itemId, quantity: item.quantity, durability: item.durability })));
+        if (!result.ok) throw new Error(playerAdmin_bulkItemFailure(result.results));
+      },
+      `${items.length} item entr${items.length === 1 ? "y was" : "ies were"} granted to ${playerName}.`,
+      { actionType: "Give Multiple Items", target: playerName, amount: String(items.length) },
+      "success",
+      (error) => `Failed to grant items to ${playerName}. ${playerAdmin_friendlyFailure(error, "Give Items", playerName)}`
+    );
+  }
+  function normalizeSkillSchool(value: string) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+  function normalizeSkillName(value: string) {
+    return String(value || "").toLowerCase().replace(/^ability:\s*/, "").replace(/[^a-z0-9]/g, "");
+  }
+  async function playerAdmin_loadCraftingRecipes() {
+    if (!dbPlayerId) {
+      playerAdmin_setCraftingRows([]);
+      return;
+    }
+    playerAdmin_setCraftingLoading(true);
+    playerAdmin_setCraftingError("");
+    try {
+      const response = await playersApi.craftingRecipes(dbPlayerId);
+      playerAdmin_setCraftingRows((response.rows || []).map((row) => ({
+        recipeId: String(row.recipeId || ""),
+        displayName: String(row.displayName || row.recipeId || ""),
+        category: String(row.category || "Essentials"),
+        source: String(row.source || "Unknown"),
+        qualityLevel: Number(row.qualityLevel || 0),
+        unlocked: Boolean(row.unlocked)
+      })).filter((row) => row.recipeId));
+    } catch (error) {
+      playerAdmin_setCraftingRows([]);
+      playerAdmin_setCraftingError(friendlyInlineError(error));
+    } finally {
+      playerAdmin_setCraftingLoading(false);
+    }
+  }
+  async function playerAdmin_unlockCraftingRecipe(row: CraftingRecipeRow) {
+    const key = `crafting:${row.recipeId}`;
+    onError("");
+    playerAdmin_showResult(key, `Unlocking ${row.displayName} for ${playerName}`, "neutral", true);
+    try {
+      const response = await playersApi.unlockCraftingRecipe(dbPlayerId, { recipeId: row.recipeId, confirmation: "UNLOCK CRAFTING RECIPE" });
+      const alreadyUnlocked = Boolean(response.result?.alreadyUnlocked);
+      playerAdmin_showResult(key, alreadyUnlocked ? `${row.displayName} was already unlocked for ${playerName}.` : `${row.displayName} was unlocked for ${playerName}.`, "success");
+      playerAdmin_addLog("Unlock Crafting Recipe", row.recipeId, "1", alreadyUnlocked ? "Already Unlocked" : "Succeeded");
+      await playerAdmin_loadCraftingRecipes();
+    } catch (error) {
+      const message = friendlyInlineError(error);
+      playerAdmin_showResult(key, message, "danger");
+      playerAdmin_addLog("Unlock Crafting Recipe", row.recipeId, "1", `Failed: ${message}`);
+    }
+  }
+  async function playerAdmin_loadResearchItems() {
+    if (!dbPlayerId) {
+      playerAdmin_setResearchRows([]);
+      return;
+    }
+    playerAdmin_setResearchLoading(true);
+    playerAdmin_setResearchError("");
+    try {
+      const response = await playersApi.researchItems(dbPlayerId);
+      playerAdmin_setResearchRows((response.rows || []).map((row) => ({
+        itemKey: String(row.itemKey || ""),
+        displayName: String(row.displayName || row.itemKey || ""),
+        category: String(row.category || "Essentials"),
+        productGroup: String(row.productGroup || "Salvage Products"),
+        type: String(row.type || "Research"),
+        unlockedState: String(row.unlockedState || "Unknown"),
+        unlocked: Boolean(row.unlocked),
+        isNew: Boolean(row.isNew)
+      })).filter((row) => row.itemKey));
+    } catch (error) {
+      playerAdmin_setResearchRows([]);
+      playerAdmin_setResearchError(friendlyInlineError(error));
+    } finally {
+      playerAdmin_setResearchLoading(false);
+    }
+  }
+  async function playerAdmin_unlockResearchItem(row: ResearchItemRow) {
+    const key = `research:${row.itemKey}`;
+    onError("");
+    playerAdmin_showResult(key, `Unlocking ${row.displayName} for ${playerName}`, "neutral", true);
+    try {
+      const response = await playersApi.unlockResearchItem(dbPlayerId, { itemKey: row.itemKey, confirmation: "UNLOCK RESEARCH ITEM" });
+      const alreadyUnlocked = Boolean(response.result?.alreadyUnlocked);
+      playerAdmin_showResult(key, alreadyUnlocked ? `${row.displayName} was already unlocked for ${playerName}.` : `${row.displayName} was unlocked for ${playerName}.`, "success");
+      playerAdmin_addLog("Unlock Research", row.itemKey, "1", alreadyUnlocked ? "Already Unlocked" : "Succeeded");
+      await playerAdmin_loadResearchItems();
+      await playerAdmin_loadCraftingRecipes();
+    } catch (error) {
+      const message = friendlyInlineError(error);
+      playerAdmin_showResult(key, message, "danger");
+      playerAdmin_addLog("Unlock Research", row.itemKey, "1", `Failed: ${message}`);
+    }
+  }
+  async function playerAdmin_loadSkillCatalog() {
+    playerAdmin_setSkillCatalogLoading(true);
+    playerAdmin_setSkillCatalogError("");
+    try {
+      const response = await adminApi.skillModules();
+      playerAdmin_setSkillCatalog(parseSkillModuleRows(response.stdout || "").map((row) => ({
+        skillModule: String(row.skillModule || ""),
+        category: String(row.category || ""),
+        id: String(row.id || ""),
+        maxLevel: Math.max(1, Number(row.maxLevel || 1))
+      })).filter((row) => row.skillModule && row.id));
+    } catch (error) {
+      playerAdmin_setSkillCatalog([]);
+      playerAdmin_setSkillCatalogError(friendlyInlineError(error));
+    } finally {
+      playerAdmin_setSkillCatalogLoading(false);
+    }
+  }
+  function playerAdmin_skillKey(school: string, name: string) {
+    return `${normalizeSkillSchool(school)}:${normalizeSkillName(name)}`;
+  }
+  function playerAdmin_findSkillModule(school: string, card: SkillCard) {
+    const schoolKey = normalizeSkillSchool(school);
+    const nameKey = normalizeSkillName(card.name);
+    return playerAdmin_skillCatalog.find((row) => normalizeSkillSchool(row.category) === schoolKey && normalizeSkillName(row.skillModule) === nameKey);
+  }
+  function playerAdmin_skillValue(school: string, card: SkillCard) {
+    const module = playerAdmin_findSkillModule(school, card);
+    const key = module?.id || playerAdmin_skillKey(school, card.name);
+    return playerAdmin_skillChanges[key] ?? playerAdmin_skillBaseline[key] ?? 0;
+  }
+  function playerAdmin_setSkillValue(school: string, card: SkillCard, rank: number) {
+    const module = playerAdmin_findSkillModule(school, card);
+    const key = module?.id || playerAdmin_skillKey(school, card.name);
+    const maxRank = Math.max(1, Number(module?.maxLevel || card.rank || 1));
+    const nextRank = Math.max(0, Math.min(maxRank, rank));
+    const baseline = playerAdmin_skillBaseline[key] ?? 0;
+    playerAdmin_setSkillChanges((current) => {
+      const next = { ...current };
+      if (nextRank === baseline) delete next[key];
+      else next[key] = nextRank;
+      return next;
+    });
+  }
+  async function playerAdmin_saveSkillChanges() {
+    const entries = Object.entries(playerAdmin_skillChanges);
+    if (!entries.length) return;
+    onError("");
+    playerAdmin_showResult("skillSave", `Saving ${entries.length} skill change${entries.length === 1 ? "" : "s"} for ${playerName}`, "neutral", true);
+    try {
+      for (const [moduleId, level] of entries) {
+        await playerAdmin_runTask(() => playersApi.setSkillModule(actionPlayerId, { module: moduleId, level }));
+      }
+      playerAdmin_setSkillBaseline((current) => ({ ...current, ...Object.fromEntries(entries) }));
+      playerAdmin_setSkillChanges({});
+      playerAdmin_showResult("skillSave", `${entries.length} skill change${entries.length === 1 ? "" : "s"} saved for ${playerName}.`, "success");
+      playerAdmin_addLog("Set Skill Modules", playerName, String(entries.length), "Succeeded");
+    } catch (error) {
+      const message = friendlyInlineError(error);
+      playerAdmin_showResult("skillSave", message, "danger");
+      playerAdmin_addLog("Set Skill Modules", playerName, String(entries.length), `Failed: ${message}`);
+    }
+  }
+  function playerAdmin_discardSkillChanges() {
+    playerAdmin_setSkillChanges({});
+    playerAdmin_showResult("skillSave", "Skill changes were discarded.", "neutral");
+  }
+  function playerAdmin_mapJourneyRows(rows: unknown) {
+    const raw = rows && typeof rows === "object" ? rows as Record<string, unknown> : {};
+    const mapRows = (items: unknown): JourneyRow[] => Array.isArray(items) ? items.map((item) => {
+      const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return {
+        id: String(row.id || ""),
+        name: String(row.name || row.id || ""),
+        rawName: String(row.rawName || row.id || ""),
+        category: String(row.category || ""),
+        depth: Math.max(0, Number(row.depth || 0)),
+        parentId: String(row.parentId || ""),
+        dependency: String(row.dependency || row.parentId || ""),
+        status: String(row.status || "Incomplete"),
+        complete: Boolean(row.complete),
+        revealed: Boolean(row.revealed),
+        pendingReward: Boolean(row.pendingReward),
+        tags: Number(row.tags || 0),
+        state: row.state === null || row.state === undefined ? null : Number(row.state)
+      };
+    }).filter((row) => row.id) : [];
+    return { story: mapRows(raw.story), contract: mapRows(raw.contract), codex: mapRows(raw.codex), tutorial: mapRows(raw.tutorial) };
+  }
+  async function playerAdmin_loadJourneyRows() {
+    if (!dbPlayerId) {
+      playerAdmin_setJourneyRows({ story: [], contract: [], codex: [], tutorial: [] });
+      return;
+    }
+    playerAdmin_setJourneyLoading(true);
+    playerAdmin_setJourneyError("");
+    try {
+      const response = await playersApi.journey(dbPlayerId);
+      playerAdmin_setJourneyRows(playerAdmin_mapJourneyRows(response.rows));
+    } catch (error) {
+      playerAdmin_setJourneyRows({ story: [], contract: [], codex: [], tutorial: [] });
+      playerAdmin_setJourneyError(friendlyInlineError(error));
+    } finally {
+      playerAdmin_setJourneyLoading(false);
+    }
+  }
+  async function playerAdmin_completeJourney(row: JourneyRow) {
+    const key = `journey:${row.category}:${row.id}`;
+    onError("");
+    playerAdmin_showResult(key, `Completing ${row.name} for ${playerName}`, "neutral", true);
+    try {
+      const response = row.category === "Tutorial"
+        ? await playersApi.completeTutorial(dbPlayerId, { tutorialId: row.id, confirmation: "COMPLETE TUTORIAL" })
+        : await playersApi.completeJourneyNode(dbPlayerId, { nodeId: row.id, confirmation: "COMPLETE JOURNEY NODE" });
+      const changed = Number(response.result?.updatedRows || response.result?.deletedRows || 1);
+      playerAdmin_showResult(key, `${row.name} was completed for ${playerName}.`, "success");
+      playerAdmin_addLog(`Complete ${row.category}`, row.rawName || row.id, String(changed), "Succeeded");
+      await playerAdmin_loadJourneyRows();
+    } catch (error) {
+      const message = friendlyInlineError(error);
+      playerAdmin_showResult(key, message, "danger");
+      playerAdmin_addLog(`Complete ${row.category}`, row.rawName || row.id, "1", `Failed: ${message}`);
+    }
+  }
+  async function playerAdmin_resetJourney(row: JourneyRow) {
+    const key = `journey:${row.category}:${row.id}`;
+    onError("");
+    playerAdmin_showResult(key, `Resetting ${row.name} for ${playerName}`, "neutral", true);
+    try {
+      const response = row.category === "Tutorial"
+        ? await playersApi.resetTutorial(dbPlayerId, { tutorialId: row.id, confirmation: "RESET TUTORIAL" })
+        : await playersApi.resetJourneyNode(dbPlayerId, { nodeId: row.id, confirmation: "RESET JOURNEY NODE" });
+      const changed = Number(response.result?.updatedRows || response.result?.deletedRows || 0);
+      playerAdmin_showResult(key, `${row.name} was reset for ${playerName}.`, "neutral");
+      playerAdmin_addLog(`Reset ${row.category}`, row.rawName || row.id, String(changed), "Succeeded");
+      await playerAdmin_loadJourneyRows();
+    } catch (error) {
+      const message = friendlyInlineError(error);
+      playerAdmin_showResult(key, message, "danger");
+      playerAdmin_addLog(`Reset ${row.category}`, row.rawName || row.id, "1", `Failed: ${message}`);
+    }
+  }
+  async function playerAdmin_useCurrentPosition() {
+    const data = await playersApi.position(dbPlayerId);
+    const position = (data.position || data) as Record<string, unknown>;
+    const x = firstDefined(position.x, position.X, position.location_x, position.pos_x);
+    const y = firstDefined(position.y, position.Y, position.location_y, position.pos_y);
+    const z = firstDefined(position.z, position.Z, position.location_z, position.pos_z);
+    const yaw = firstDefined(position.yaw, position.Yaw, position.rotation_yaw, position.rot_yaw, 0);
+    if (x === undefined || y === undefined || z === undefined) throw new Error("Current position is not available from the detected player position schema.");
+    playerAdmin_setCoords({ x: String(x), y: String(y), z: String(z), yaw: String(yaw ?? 0) });
+  }
+  async function playerAdmin_loadVehicles() {
+    try {
+      const response = await adminApi.structuredVehicles();
+      const parsed = Object.fromEntries((response.vehicles || []).map((vehicle) => [vehicle.id || vehicle.name, vehicle.templates || []]).filter(([id]) => id));
+      playerAdmin_setVehicleCatalog(parsed);
+      const firstVehicle = Object.keys(parsed).sort((a, b) => friendlyVehicleName(a).localeCompare(friendlyVehicleName(b)))[0] || "";
+      if (firstVehicle && !playerAdmin_vehicleId) {
+        playerAdmin_setVehicleId(firstVehicle);
+        playerAdmin_setVehicleTemplate([...(parsed[firstVehicle] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)))[0] || "");
+      }
+    } catch {
+      try {
+        const response = await adminApi.vehicles("");
+        const parsed = parseVehicleCatalog(response.stdout || "");
+        playerAdmin_setVehicleCatalog(parsed);
+        const firstVehicle = Object.keys(parsed).sort((a, b) => friendlyVehicleName(a).localeCompare(friendlyVehicleName(b)))[0] || "";
+        if (firstVehicle && !playerAdmin_vehicleId) {
+          playerAdmin_setVehicleId(firstVehicle);
+          playerAdmin_setVehicleTemplate([...(parsed[firstVehicle] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)))[0] || "");
+        }
+      } catch {
+        playerAdmin_setVehicleCatalog({});
+      }
+    }
+  }
+  useEffect(() => {
+    if (playerAdmin_activeTab === "Crafting") void playerAdmin_loadCraftingRecipes();
+  }, [playerAdmin_activeTab, dbPlayerId]);
+  useEffect(() => {
+    if (playerAdmin_activeTab === "Research") void playerAdmin_loadResearchItems();
+  }, [playerAdmin_activeTab, dbPlayerId]);
+  useEffect(() => {
+    if (playerAdmin_activeTab === "Skills" && !playerAdmin_skillCatalog.length && !playerAdmin_skillCatalogLoading) void playerAdmin_loadSkillCatalog();
+  }, [playerAdmin_activeTab, playerAdmin_skillCatalog.length, playerAdmin_skillCatalogLoading]);
+  useEffect(() => {
+    if (playerAdmin_activeTab === "Journey") void playerAdmin_loadJourneyRows();
+  }, [playerAdmin_activeTab, dbPlayerId]);
+  useEffect(() => {
+    if (playerAdmin_activeTab === "Admin" && !Object.keys(playerAdmin_vehicleCatalog).length) void playerAdmin_loadVehicles();
+  }, [playerAdmin_activeTab, Object.keys(playerAdmin_vehicleCatalog).length]);
+  useEffect(() => {
+    playerAdmin_setSkillBaseline({});
+    playerAdmin_setSkillChanges({});
+  }, [actionPlayerId]);
+  useEffect(() => () => { if (playerAdmin_resultTimer.current) window.clearTimeout(playerAdmin_resultTimer.current); }, []);
+  const playerAdmin_table = (playerAdmin_columns: string[], playerAdmin_rows: Record<string, string>[]) => (
+    <div className="playerAdmin_tableWrap">
+      <table className="playerAdmin_table">
+        <thead><tr>{playerAdmin_columns.map((playerAdmin_column) => <th key={playerAdmin_column}>{playerAdmin_column}</th>)}</tr></thead>
+        <tbody>{playerAdmin_rows.map((playerAdmin_row, playerAdmin_index) => <tr key={playerAdmin_index}>{playerAdmin_columns.map((playerAdmin_column) => <td key={playerAdmin_column}>{playerAdmin_row[playerAdmin_column] || "-"}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+  const playerAdmin_toggleBox = (playerAdmin_key: string, playerAdmin_title: string, playerAdmin_children: React.ReactNode) => (
+    <div className={`playerAdmin_toggle ${playerAdmin_openToggles[playerAdmin_key] ? "open" : ""}`}>
+      <button className="playerAdmin_toggleHeader" onClick={() => playerAdmin_toggle(playerAdmin_key)}>{playerAdmin_openToggles[playerAdmin_key] ? <ChevronUp size={18} /> : <ChevronDown size={18} />}<span>{playerAdmin_title}</span></button>
+      {playerAdmin_openToggles[playerAdmin_key] && <div className="playerAdmin_toggleBody">{playerAdmin_children}</div>}
+    </div>
+  );
+  const playerAdmin_skillCards = (playerAdmin_school: string, playerAdmin_items: SkillCard[]) => (
+    <div className="playerAdmin_cardGrid">{playerAdmin_items.map((playerAdmin_item) => {
+      const module = playerAdmin_findSkillModule(playerAdmin_school, playerAdmin_item);
+      const key = module?.id || playerAdmin_skillKey(playerAdmin_school, playerAdmin_item.name);
+      const maxRank = Math.max(1, Number(module?.maxLevel || playerAdmin_item.rank || 1));
+      const value = playerAdmin_skillChanges[key] ?? playerAdmin_skillBaseline[key] ?? 0;
+      const dirty = key in playerAdmin_skillChanges;
+      return <article className={`playerAdmin_card playerAdmin_skillCard ${dirty ? "dirty" : ""}`} key={`${playerAdmin_school}-${playerAdmin_item.name}-${playerAdmin_item.type}`}>
+        <div className="playerAdmin_skillCardHeader"><strong>{playerAdmin_item.name}</strong><span>{value}/{maxRank}</span></div>
+        <span>Type: {playerAdmin_item.type}</span>
+        <div className="playerAdmin_rankBars" aria-label={`${playerAdmin_item.name} rank`}>
+          {Array.from({ length: maxRank }, (_, index) => {
+            const rank = index + 1;
+            const active = rank <= value;
+            return <button key={rank} type="button" className={active ? "active" : ""} disabled={!module || playerAdmin_actionResult?.pending} title={module ? `Set ${playerAdmin_item.name} to ${value === rank ? 0 : rank}` : "Skill module ID was not found"} onClick={() => playerAdmin_setSkillValue(playerAdmin_school, playerAdmin_item, value === rank ? 0 : rank)} aria-label={`Set ${playerAdmin_item.name} rank ${value === rank ? 0 : rank}`} />;
+          })}
+        </div>
+        <code>{module?.id || "Module ID not found"}</code>
+      </article>;
+    })}</div>
+  );
+  const playerAdmin_actionRow = (playerAdmin_key: string, playerAdmin_label: string, playerAdmin_input: React.ReactNode, playerAdmin_buttonLabel: string, playerAdmin_onClick: () => void, playerAdmin_disabled = false) => (
+    <div className="playerAdmin_actionRow">
+      <span>{playerAdmin_label}</span>
+      {playerAdmin_input}
+      <button disabled={playerAdmin_disabled || playerAdmin_actionResult?.pending} onClick={playerAdmin_onClick}>{playerAdmin_buttonLabel}</button>
+      <InlineActionResult result={playerAdmin_actionResult} resultKey={playerAdmin_key} />
+    </div>
+  );
+  const playerAdmin_filteredCraftingRows = playerAdmin_craftingRows.filter((row) => !playerAdmin_craftingCategory || row.category === playerAdmin_craftingCategory);
+  const playerAdmin_filteredResearchRows = playerAdmin_researchRows.filter((row) =>
+    (!playerAdmin_researchCategory || row.category === playerAdmin_researchCategory) &&
+    (!playerAdmin_productGroup || row.productGroup === playerAdmin_productGroup)
+  );
+  const playerAdmin_vehicleIds = Object.keys(playerAdmin_vehicleCatalog).sort((a, b) => friendlyVehicleName(a).localeCompare(friendlyVehicleName(b)));
+  const playerAdmin_selectedTemplates = [...(playerAdmin_vehicleCatalog[playerAdmin_vehicleId] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)));
+  const playerAdmin_craftingTable = (
+    <div className="playerAdmin_tableWrap">
+      <table className="playerAdmin_table">
+        <thead><tr><th>Recipe</th><th>Recipe ID</th><th>Source</th><th>Quality</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+          {playerAdmin_filteredCraftingRows.map((row) => (
+            <tr key={row.recipeId}>
+              <td>{row.displayName}</td>
+              <td><code>{row.recipeId}</code></td>
+              <td>{row.source}</td>
+              <td>{row.qualityLevel}</td>
+              <td>{row.unlocked ? "Unlocked" : "Locked"}</td>
+              <td className="playerAdmin_actionCell"><button disabled={!dbPlayerId || row.unlocked || playerAdmin_actionResult?.pending} onClick={() => playerAdmin_unlockCraftingRecipe(row)}>{row.unlocked ? "Unlocked" : "Unlock"}</button><InlineActionResult result={playerAdmin_actionResult} resultKey={`crafting:${row.recipeId}`} /></td>
+            </tr>
+          ))}
+          {!playerAdmin_filteredCraftingRows.length && <tr><td colSpan={6}>{playerAdmin_craftingLoading ? "Loading recipes..." : "No crafting recipes found for this category."}</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+  const playerAdmin_researchTable = (
+    <div className="playerAdmin_tableWrap">
+      <table className="playerAdmin_table">
+        <thead><tr><th>Research</th><th>Item Key</th><th>Type</th><th>Product Group</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+          {playerAdmin_filteredResearchRows.map((row) => (
+            <tr key={row.itemKey}>
+              <td>{row.displayName}</td>
+              <td><code>{row.itemKey}</code></td>
+              <td>{row.type}</td>
+              <td>{row.productGroup}</td>
+              <td>{row.unlockedState}</td>
+              <td className="playerAdmin_actionCell"><button disabled={!dbPlayerId || row.unlocked || playerAdmin_actionResult?.pending} onClick={() => playerAdmin_unlockResearchItem(row)}>{row.unlocked ? "Unlocked" : "Unlock"}</button><InlineActionResult result={playerAdmin_actionResult} resultKey={`research:${row.itemKey}`} /></td>
+            </tr>
+          ))}
+          {!playerAdmin_filteredResearchRows.length && <tr><td colSpan={6}>{playerAdmin_researchLoading ? "Loading research..." : "No research entries found for this filter."}</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+  const playerAdmin_journeyTable = (rows: JourneyRow[], emptyText: string) => (
+    <div className="playerAdmin_tableWrap">
+      <table className="playerAdmin_table">
+        <thead><tr><th>Name</th><th>Type</th><th>ID</th><th>Depends On</th><th>Status</th><th>Tags</th><th>Action</th></tr></thead>
+        <tbody>
+          {rows.map((row) => {
+            const key = `journey:${row.category}:${row.id}`;
+            return <tr key={`${row.category}-${row.id}`}>
+              <td className="playerAdmin_journeyName" style={{ paddingLeft: `${10 + row.depth * 18}px` }}>{row.name}</td>
+              <td>{row.category}</td>
+              <td><code>{row.rawName || row.id}</code></td>
+              <td>{row.dependency ? <code>{row.dependency}</code> : "Unknown"}</td>
+              <td>{row.status}{row.pendingReward ? " / Pending Reward" : ""}</td>
+              <td>{row.category === "Tutorial" ? "-" : row.tags || 0}</td>
+              <td className="playerAdmin_actionCell">
+                <button disabled={!dbPlayerId || row.complete || playerAdmin_actionResult?.pending} onClick={() => playerAdmin_completeJourney(row)}>{row.complete ? "Complete" : "Complete"}</button>
+                <button disabled={!dbPlayerId || playerAdmin_actionResult?.pending} onClick={() => playerAdmin_resetJourney(row)}>Reset</button>
+                <InlineActionResult result={playerAdmin_actionResult} resultKey={key} />
+              </td>
+            </tr>;
+          })}
+          {!rows.length && <tr><td colSpan={7}>{playerAdmin_journeyLoading ? "Loading journey data..." : emptyText}</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+  const playerAdmin_researchGroups: Record<string, string[]> = {
+    "Water Discipline": ["Salvage Products", "Copper Products", "Iron Products", "Steel Products", "Aluminum Products", "Duraluminum Products", "Plastanium Products"],
+    Combat: ["Salvage Products", "Copper Products", "Iron Products", "Steel Products", "Aluminum Products", "Duraluminum Products", "Plastanium Products"],
+    Construction: ["Salvage Products", "Copper Products", "Iron Products", "Steel Products", "Aluminum Products", "Duraluminum Products", "Plastanium Products"],
+    Exploration: ["Salvage Products", "Copper Products", "Iron Products", "Steel Products", "Aluminum Products", "Duraluminum Products", "Plastanium Products"],
+    Vehicles: ["Copper Products", "Iron Products", "Steel Products", "Aluminum Products", "Duraluminum Products", "Plastanium Products"],
+    Augmentations: ["Garment Augmentations", "Melee Weapon Augmentations", "Ranged Weapon Augmentations", "Generic Augmentations"],
+    Uniques: ["Copper Products", "Iron Products", "Steel Products", "Aluminum Products", "Duraluminum Products", "Plastanium Products"]
+  };
+  const playerAdmin_skillTrees: Record<string, { tree: string; cards: { name: string; type: string; rank: string }[] }[]> = {
+    Trooper: [
+      { tree: "Gunnery", cards: [{ name: "Energy Capsule", type: "Ability", rank: "1" }, { name: "Heavy Weapon Damage", type: "Passive", rank: "3" }, { name: "Gunsmith", type: "Passive", rank: "3" }, { name: "Heavy Weapon Agility", type: "Technique", rank: "3" }, { name: "Scattergun Damage", type: "Passive", rank: "3" }, { name: "Field Maintenance", type: "Passive", rank: "3" }, { name: "Disruptor Damage", type: "Passive", rank: "3" }, { name: "Center of Mass", type: "Technique", rank: "3" }, { name: "Ranged Damage", type: "Passive", rank: "3" }] },
+      { tree: "Suspensor Training", cards: [{ name: "Suspensor Blast", type: "Ability", rank: "1" }, { name: "Death from Above", type: "Technique", rank: "3" }, { name: "Collapse Grenade", type: "Ability", rank: "1" }, { name: "Suspensor Efficiency", type: "Passive", rank: "3" }, { name: "Suspensor Dash", type: "Technique", rank: "1" }, { name: "Gravity Field", type: "Ability", rank: "1" }, { name: "Anti-gravity Field", type: "Ability", rank: "1" }] },
+      { tree: "Tactical Tech", cards: [{ name: "Reflexive Reload", type: "Passive", rank: "1" }, { name: "Assault Seeker", type: "Ability", rank: "3" }, { name: "Attractor Field", type: "Ability", rank: "1" }, { name: "Explosive Grenade", type: "Ability", rank: "3" }, { name: "Battle Hardened", type: "Technique", rank: "3" }, { name: "Shigawire Claw", type: "Ability", rank: "3" }] }
+    ],
+    Mentat: [
+      { tree: "Mental Calculus", cards: [{ name: "Shield Overcharge", type: "Passive", rank: "1" }, { name: "Exploit Weakness", type: "Technique", rank: "1" }, { name: "Rifle Damage", type: "Passive", rank: "3" }, { name: "Tailoring", type: "Passive", rank: "3" }, { name: "Marksman", type: "Technique", rank: "3" }, { name: "Pistol Damage", type: "Passive", rank: "3" }, { name: "Garment Keeper", type: "Passive", rank: "3" }, { name: "Ranged Damage", type: "Passive", rank: "3" }, { name: "The Sentinel", type: "Ability", rank: "3" }] },
+      { tree: "Assassination", cards: [{ name: "Hunter-Seeker", type: "Ability", rank: "1" }, { name: "Poison Tooth", type: "Technique", rank: "3" }, { name: "Stunner", type: "Ability", rank: "1" }, { name: "Assassin's Shot", type: "Passive", rank: "3" }, { name: "Poison Mine", type: "Ability", rank: "3" }, { name: "Headshot Damage", type: "Passive", rank: "3" }, { name: "Poison Capsule", type: "Ability", rank: "3" }] },
+      { tree: "Tactician", cards: [{ name: "Source of Power", type: "Ability", rank: "1" }, { name: "Anti-gravity Mine", type: "Ability", rank: "1" }, { name: "Iron Will", type: "Technique", rank: "1" }, { name: "Gravity Mine", type: "Ability", rank: "1" }, { name: "Solido Decoy", type: "Ability", rank: "1" }, { name: "Shield Wall", type: "Ability", rank: "3" }] }
+    ],
+    Planetologist: [
+      { tree: "Scientist", cards: [{ name: "Conservation of Energy", type: "Technique", rank: "3" }, { name: "Compaction", type: "Passive", rank: "3" }, { name: "Overcharge", type: "Passive", rank: "3" }, { name: "Deep Analysis", type: "Passive", rank: "3" }, { name: "Dew Gathering", type: "Passive", rank: "3" }, { name: "Rerouting", type: "Passive", rank: "3" }, { name: "Cutteray Mining", type: "Passive", rank: "3" }] },
+      { tree: "Explorer", cards: [{ name: "Spice Surveyor", type: "Passive", rank: "1" }, { name: "Scanner Mastery", type: "Passive", rank: "3" }, { name: "Stillsuit Seals", type: "Passive", rank: "3" }, { name: "Cartographer", type: "Passive", rank: "1" }, { name: "Mountaineer", type: "Passive", rank: "3" }, { name: "Suspensor Pad", type: "Ability", rank: "1" }] },
+      { tree: "Mechanic", cards: [{ name: "Heat Management", type: "Passive", rank: "1" }, { name: "Fuel Efficient Pilot", type: "Passive", rank: "3" }, { name: "Sandcrawler Yield", type: "Passive", rank: "3" }, { name: "Vehicle Scanning", type: "Passive", rank: "3" }, { name: "Fuel Efficient Driver", type: "Passive", rank: "3" }, { name: "Vehicle Mining", type: "Passive", rank: "3" }, { name: "Vehicle Repair", type: "Passive", rank: "3" }] }
+    ],
+    "Bene Gesserit": [
+      { tree: "Weirding Way", cards: [{ name: "Bindu Dodge", type: "Passive", rank: "1" }, { name: "Prana-Bindu Strikes", type: "Ability", rank: "1" }, { name: "Weirding Step", type: "Ability", rank: "1" }, { name: "Short Blade Damage", type: "Passive", rank: "3" }, { name: "Manipulate Instability", type: "Technique", rank: "3" }, { name: "Blade Damage", type: "Passive", rank: "3" }, { name: "Bindu Sprint", type: "Ability", rank: "3" }] },
+      { tree: "The Voice", cards: [{ name: "Screech", type: "Passive", rank: "1" }, { name: "Rapid Register", type: "Technique", rank: "1" }, { name: "Stop", type: "Ability", rank: "1" }, { name: "Ignore", type: "Ability", rank: "1" }, { name: "Voice Training", type: "Passive", rank: "3" }, { name: "Compel", type: "Ability", rank: "1" }] },
+      { tree: "Body Control", cards: [{ name: "Litany Against Fear", type: "Ability", rank: "3" }, { name: "Prana-Bindu Stability", type: "Technique", rank: "3" }, { name: "Metabolize Poison", type: "Technique", rank: "1" }, { name: "Vitality", type: "Passive", rank: "3" }, { name: "Self-Healing", type: "Passive", rank: "3" }, { name: "Poison Tolerance", type: "Passive", rank: "3" }, { name: "Trauma Recovery", type: "Technique", rank: "3" }, { name: "Sun Tolerance", type: "Passive", rank: "3" }, { name: "Recovery", type: "Passive", rank: "3" }] }
+    ],
+    Swordmaster: [
+      { tree: "The Blade", cards: [{ name: "Precise Parry", type: "Passive", rank: "3" }, { name: "Eye of the Storm", type: "Ability", rank: "3" }, { name: "Foil", type: "Ability", rank: "1" }, { name: "Long Blade Damage", type: "Passive", rank: "3" }, { name: "Dance of Blades", type: "Technique", rank: "3" }, { name: "Retaliate", type: "Ability", rank: "1" }, { name: "Blade Damage", type: "Passive", rank: "3" }] },
+      { tree: "The Will", cards: [{ name: "Thrive on Danger", type: "Technique", rank: "1" }, { name: "Solid Stance", type: "Passive", rank: "3" }, { name: "Confidence", type: "Passive", rank: "3" }, { name: "Bleed Tolerance", type: "Passive", rank: "3" }, { name: "Reckless Lunge", type: "Technique", rank: "3" }, { name: "Deflection", type: "Ability", rank: "1" }] },
+      { tree: "The Way", cards: [{ name: "Prescient Strike", type: "Passive", rank: "1" }, { name: "General Conditioning", type: "Passive", rank: "3" }, { name: "Desert Conditioning", type: "Passive", rank: "3" }, { name: "Crippling Strike", type: "Ability", rank: "1" }, { name: "Disciplined Breathing", type: "Technique", rank: "3" }, { name: "Inspiration", type: "Ability", rank: "3" }, { name: "Field Medicine", type: "Passive", rank: "3" }, { name: "Optimized Hydration", type: "Passive", rank: "3" }, { name: "Knee Charge", type: "Ability", rank: "3" }] }
+    ],
+    Specializations: ["Combat", "Crafting", "Exploration", "Gathering", "Sabotage"].map((playerAdmin_tree) => ({ tree: playerAdmin_tree, cards: [] }))
+  };
+
+  return (
+    <section className="playerAdmin_container" aria-label="Player admin layout">
+      <div className="playerAdmin_header"><span aria-hidden="true" /><button onClick={onClose}>Close</button></div>
+      <PlayerSummary detail={detail} fallback={fallback} dbPlayerId={dbPlayerId} actionPlayerId={actionPlayerId} />
+      <div className="playerAdmin_tabs" role="tablist" aria-label="Player admin tabs">{playerAdmin_tabs.map((playerAdmin_tab) => <button key={playerAdmin_tab} className={playerAdmin_activeTab === playerAdmin_tab ? "active" : ""} onClick={() => playerAdmin_setActiveTab(playerAdmin_tab)}>{playerAdmin_tab}</button>)}</div>
+      {playerAdmin_activeTab === "Character" && <div className="playerAdmin_content">
+        <section className="playerAdmin_box"><h4>Grant Rewards</h4><div className="playerAdmin_section"><h5>Quick Rewards</h5>
+          {playerAdmin_actionRow("water", "Give Water", <input type="number" min="1" value={playerAdmin_waterAmount} onChange={(event) => playerAdmin_setWaterAmount(event.target.value)} />, "Give", () => playerAdmin_runAction("water", `Giving ${Number(playerAdmin_waterAmount) || 10} cups of water to ${playerName}`, () => playerAdmin_runTask(() => playersApi.giveItemId(actionPlayerId, { itemId: "WaterPack_Consumable", quantity: Number(playerAdmin_waterAmount) || 10, durability: 1 })), `${playerName} received ${Number(playerAdmin_waterAmount) || 10} cups of water.`, { actionType: "Give Water", target: playerName, amount: String(Number(playerAdmin_waterAmount) || 10) }), !playerAdmin_canRunLiveAction)}
+          {playerAdmin_actionRow("xp", "Give XP", <input type="number" min="1" value={playerAdmin_xpAmount} onChange={(event) => playerAdmin_setXpAmount(event.target.value)} />, "Give", () => playerAdmin_runAction("xp", `Giving ${Number(playerAdmin_xpAmount) || 0} XP to ${playerName}`, () => playerAdmin_runTask(() => playersApi.addXp(actionPlayerId, Number(playerAdmin_xpAmount) || 0)), `${playerName} received ${Number(playerAdmin_xpAmount) || 0} XP.`, { actionType: "Give XP", target: playerName, amount: String(Number(playerAdmin_xpAmount) || 0) }), !playerAdmin_canRunLiveAction)}
+          {playerAdmin_actionRow("currency", "Give Currency", <><select value={playerAdmin_currencyType} onChange={(event) => playerAdmin_setCurrencyType(event.target.value)}><option>Solari</option><option>Scrip</option></select><input type="number" min="1" value={playerAdmin_currencyAmount} onChange={(event) => playerAdmin_setCurrencyAmount(event.target.value)} /></>, "Give", () => playerAdmin_runAction("currency", `Giving ${Number(playerAdmin_currencyAmount) || 0} ${playerAdmin_currencyType} to ${playerName}`, () => playersApi.addCurrency(dbPlayerId, { currencyId: playerAdmin_currencyType === "Scrip" ? 1 : 0, amount: Number(playerAdmin_currencyAmount) || 0, confirmation: "ADD CURRENCY" }), `${playerName} received ${Number(playerAdmin_currencyAmount) || 0} ${playerAdmin_currencyType}.`, { actionType: `Give ${playerAdmin_currencyType}`, target: playerName, amount: String(Number(playerAdmin_currencyAmount) || 0) }), !dbPlayerId)}
+          {playerAdmin_actionRow("intel", "Give Intel", <input type="number" min="1" value={playerAdmin_intelAmount} onChange={(event) => playerAdmin_setIntelAmount(event.target.value)} />, "Give", () => playerAdmin_runAction("intel", `Giving ${Number(playerAdmin_intelAmount) || 0} Intel to ${playerName}`, () => playersApi.addIntel(dbPlayerId, { amount: Number(playerAdmin_intelAmount) || 0, confirmation: "ADD INTEL" }), `${playerName} received ${Number(playerAdmin_intelAmount) || 0} Intel.`, { actionType: "Give Intel", target: playerName, amount: String(Number(playerAdmin_intelAmount) || 0) }), !dbPlayerId)}
+          {playerAdmin_actionRow("faction", "Give Faction Reputation", <><select value={playerAdmin_factionName} onChange={(event) => playerAdmin_setFactionName(event.target.value)}><option>Atreides</option><option>Harkonnen</option><option>Smuggler</option></select><input type="number" min="1" max="12474" value={playerAdmin_factionAmount} onChange={(event) => playerAdmin_setFactionAmount(event.target.value)} /></>, "Give", () => playerAdmin_runAction("faction", `Giving ${Number(playerAdmin_factionAmount) || 0} ${playerAdmin_factionName} reputation to ${playerName}`, () => playersApi.addFactionReputation(dbPlayerId, { factionId: playerAdmin_factionIds[playerAdmin_factionName] || 1, amount: Number(playerAdmin_factionAmount) || 0, confirmation: "ADD FACTION REPUTATION" }), `${playerName} received ${Number(playerAdmin_factionAmount) || 0} ${playerAdmin_factionName} reputation.`, { actionType: "Give Faction Reputation", target: playerAdmin_factionName, amount: String(Number(playerAdmin_factionAmount) || 0) }), !dbPlayerId)}
+        </div><div className="playerAdmin_section"><h5>Give Items</h5><p>Search the item catalog, select the exact item, then add one or more entries before granting them to the player.</p><ItemCatalogSelector selected={playerAdmin_selectedItem} onSelect={playerAdmin_chooseItem} /><div className="playerAdmin_actionRow"><span>Selected Item</span><input className="package-item-quantity-input" type="number" min="1" value={playerAdmin_quantity} onChange={(event) => playerAdmin_setQuantity(event.target.value)} /><input className="package-item-durability-input" type="number" min="0" value={playerAdmin_durability} onChange={(event) => playerAdmin_setDurability(event.target.value)} /><button disabled={!playerAdmin_selectedItem} onClick={playerAdmin_addSelectedItem}>Add Item</button><button disabled={!playerAdmin_multiList.length} onClick={() => playerAdmin_setMultiList([])}>Clear</button></div>
+          {playerAdmin_multiList.length ? <div className="table-wrap package-items-table playerAdmin_itemsTable"><table><thead><tr><th>Preview</th><th>Item Name</th><th>Item ID</th><th>Quantity</th><th>Durability</th><th>Actions</th></tr></thead><tbody>{playerAdmin_multiList.map((item, index) => <tr key={`${item.itemName || item.itemId}-${index}`}><td><PackageItemPreview item={item} /></td><td>{catalogItemName(item)}</td><td>{catalogItemId(item)}</td><td>{item.quantity}</td><td>{item.durability}</td><td className="package-actions-cell"><button className="danger" onClick={() => playerAdmin_setMultiList(playerAdmin_multiList.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></td></tr>)}</tbody></table></div> : <div className="empty playerAdmin_empty">No items queued yet.</div>}
+          <div className="playerAdmin_actionRow"><span>Grant Items</span><button disabled={!playerAdmin_canRunLiveAction || (!playerAdmin_multiList.length && !playerAdmin_selectedItem) || playerAdmin_actionResult?.pending} onClick={() => void playerAdmin_giveMultipleItems()}>{playerAdmin_multiList.length > 1 ? "Give Multiple Items" : "Give Item"}</button><InlineActionResult result={playerAdmin_actionResult} resultKey="giveMultiple" /></div></div></section>
+        {playerAdmin_toggleBox("character_inventory", "Inventory", <PlayerDetailTab playerId={dbPlayerId} tab="inventory" onError={onError} />)}
+        {playerAdmin_toggleBox("character_log", "Character Action Log", playerAdmin_actionLog.length ? playerAdmin_table(["Date / Time", "Admin", "Action Type", "Target", "Amount", "Notes"], playerAdmin_actionLog) : <p>No character actions have been recorded in this layout yet.</p>)}
+      </div>}
+      {playerAdmin_activeTab === "Crafting" && <div className="playerAdmin_content"><section className="playerAdmin_box"><h4>Crafting Browser</h4><p>Select a category to view verified in-game crafting recipe IDs, then unlock the recipe for the selected player.</p><div className="playerAdmin_filterRow"><select value={playerAdmin_craftingCategory} onChange={(playerAdmin_event) => playerAdmin_setCraftingCategory(playerAdmin_event.target.value)}><option value="">All Categories</option>{playerAdmin_craftingCategories.map((playerAdmin_option) => <option key={playerAdmin_option}>{playerAdmin_option}</option>)}</select><button disabled={!dbPlayerId || playerAdmin_craftingLoading} onClick={() => playerAdmin_loadCraftingRecipes()}>{playerAdmin_craftingLoading ? "Loading..." : "Reload"}</button><span className="playerAdmin_note">{playerAdmin_filteredCraftingRows.length} recipe{playerAdmin_filteredCraftingRows.length === 1 ? "" : "s"}</span></div>{playerAdmin_craftingError ? <p className="playerAdmin_note danger">{playerAdmin_craftingError}</p> : playerAdmin_craftingTable}</section></div>}
+      {playerAdmin_activeTab === "Research" && <div className="playerAdmin_content"><section className="playerAdmin_box"><h4>Research Browser</h4><p>Select a research category and product group to view verified in-game tech knowledge keys.</p><div className="playerAdmin_filterRow"><select value={playerAdmin_researchCategory} onChange={(playerAdmin_event) => { playerAdmin_setResearchCategory(playerAdmin_event.target.value); playerAdmin_setProductGroup(""); }}><option value="">All Categories</option>{Object.keys(playerAdmin_researchGroups).map((playerAdmin_option) => <option key={playerAdmin_option}>{playerAdmin_option}</option>)}</select>{playerAdmin_researchCategory && <select value={playerAdmin_productGroup} onChange={(playerAdmin_event) => playerAdmin_setProductGroup(playerAdmin_event.target.value)}><option value="">All Product Groups</option>{playerAdmin_researchGroups[playerAdmin_researchCategory].map((playerAdmin_option) => <option key={playerAdmin_option}>{playerAdmin_option}</option>)}</select>}<button disabled={!dbPlayerId || playerAdmin_researchLoading} onClick={() => playerAdmin_loadResearchItems()}>{playerAdmin_researchLoading ? "Loading..." : "Reload"}</button><span className="playerAdmin_note">{playerAdmin_filteredResearchRows.length} entr{playerAdmin_filteredResearchRows.length === 1 ? "y" : "ies"}</span></div>{playerAdmin_researchError ? <p className="playerAdmin_note danger">{playerAdmin_researchError}</p> : playerAdmin_researchTable}</section></div>}
+      {playerAdmin_activeTab === "Skills" && <div className="playerAdmin_content"><section className="playerAdmin_box"><h4>Skill Point Controls</h4>{playerAdmin_actionRow("skillPoints", "Set Skill Points", <input type="number" min="0" value={playerAdmin_skillPointsAmount} onChange={(event) => playerAdmin_setSkillPointsAmount(event.target.value)} />, "Set", () => playerAdmin_runAction("skillPoints", `Setting ${playerName}'s skill points to ${Number(playerAdmin_skillPointsAmount) || 0}`, () => playerAdmin_runTask(() => playersApi.setSkillPoints(actionPlayerId, Number(playerAdmin_skillPointsAmount) || 0)), `${playerName}'s skill points were updated.`, { actionType: "Set Skill Points", target: playerName, amount: String(Number(playerAdmin_skillPointsAmount) || 0) }), !playerAdmin_canRunLiveAction)}</section><section className="playerAdmin_box"><h4>Skill Browser</h4><p>Select a skill school, then open a skill tree to set ranks with the bars.</p><div className="playerAdmin_filterRow"><select value={playerAdmin_skillSchool} onChange={(playerAdmin_event) => playerAdmin_setSkillSchool(playerAdmin_event.target.value)}><option value="">Select Skill School</option>{Object.keys(playerAdmin_skillTrees).map((playerAdmin_option) => <option key={playerAdmin_option}>{playerAdmin_option}</option>)}</select><button disabled={playerAdmin_skillCatalogLoading} onClick={() => playerAdmin_loadSkillCatalog()}>{playerAdmin_skillCatalogLoading ? "Loading..." : "Reload Modules"}</button><span className="playerAdmin_note">{Object.keys(playerAdmin_skillChanges).length} unsaved change{Object.keys(playerAdmin_skillChanges).length === 1 ? "" : "s"}</span></div>{playerAdmin_skillCatalogError && <p className="playerAdmin_note danger">{playerAdmin_skillCatalogError}</p>}{playerAdmin_skillSchool && <div className="playerAdmin_section"><h5>{playerAdmin_skillSchool}</h5>{playerAdmin_skillTrees[playerAdmin_skillSchool].map((playerAdmin_tree) => playerAdmin_toggleBox(`skill_${playerAdmin_skillSchool}_${playerAdmin_tree.tree}`, playerAdmin_tree.tree, playerAdmin_tree.cards.length ? playerAdmin_skillCards(playerAdmin_skillSchool, playerAdmin_tree.cards) : <p>Leave empty for now.</p>))}{Object.keys(playerAdmin_skillChanges).length > 0 && <div className="playerAdmin_saveBar"><button disabled={!playerAdmin_canRunLiveAction || playerAdmin_actionResult?.pending} onClick={() => playerAdmin_saveSkillChanges()}>Save</button><button disabled={playerAdmin_actionResult?.pending} onClick={() => playerAdmin_discardSkillChanges()}>Discard</button><InlineActionResult result={playerAdmin_actionResult} resultKey="skillSave" /></div>}</div>}</section></div>}
+      {playerAdmin_activeTab === "Journey" && <div className="playerAdmin_content"><section className="playerAdmin_box"><h4>Journey Browser</h4><p>Complete or reset story, contract, codex, and tutorial progress for the selected player. Rows with a parent dependency should be handled with that dependency in mind.</p><div className="playerAdmin_filterRow"><button disabled={!dbPlayerId || playerAdmin_journeyLoading} onClick={() => playerAdmin_loadJourneyRows()}>{playerAdmin_journeyLoading ? "Loading..." : "Reload"}</button><span className="playerAdmin_note">{playerAdmin_journeyRows.story.length + playerAdmin_journeyRows.contract.length + playerAdmin_journeyRows.codex.length + playerAdmin_journeyRows.tutorial.length} journey entr{playerAdmin_journeyRows.story.length + playerAdmin_journeyRows.contract.length + playerAdmin_journeyRows.codex.length + playerAdmin_journeyRows.tutorial.length === 1 ? "y" : "ies"}</span></div>{playerAdmin_journeyError && <p className="playerAdmin_note danger">{playerAdmin_journeyError}</p>}{playerAdmin_toggleBox("journey_story", `Story (${playerAdmin_journeyRows.story.length})`, playerAdmin_journeyTable(playerAdmin_journeyRows.story, "No story entries were found."))}{playerAdmin_toggleBox("journey_contract", `Contracts (${playerAdmin_journeyRows.contract.length})`, playerAdmin_journeyTable(playerAdmin_journeyRows.contract, "No contract entries were found."))}{playerAdmin_toggleBox("journey_codex", `Codex (${playerAdmin_journeyRows.codex.length})`, playerAdmin_journeyTable(playerAdmin_journeyRows.codex, "No codex entries were found."))}{playerAdmin_toggleBox("journey_tutorial", `Tutorial (${playerAdmin_journeyRows.tutorial.length})`, playerAdmin_journeyTable(playerAdmin_journeyRows.tutorial, "No tutorial entries were found."))}</section></div>}
+      {playerAdmin_activeTab === "Admin" && <div className="playerAdmin_content"><section className="playerAdmin_box"><h4>Player Admin Actions</h4><p>Dangerous player actions require confirmation before running.</p><div className="playerAdmin_section"><h5>Danger Zone</h5><div className="playerAdmin_buttonRow"><button className="danger" disabled={!playerAdmin_canRunLiveAction || playerAdmin_actionResult?.pending} onClick={() => {
+        if (!window.confirm(`Kick ${playerName} from the server?`)) return;
+        void playerAdmin_runAction("adminKick", `Kicking ${playerName}`, () => playerAdmin_runTask(() => playersApi.kick(actionPlayerId)), `${playerName} was kicked from the server.`, { actionType: "Kick Player", target: playerName, amount: "1" }, "danger");
+      }}>Kick Player</button><button className="danger" disabled={!playerAdmin_canRunLiveAction || playerAdmin_actionResult?.pending} onClick={() => {
+        if (!window.confirm(`Wipe ${playerName}'s inventory?`)) return;
+        void playerAdmin_runAction("adminWipe", `Wiping ${playerName}'s inventory`, () => playerAdmin_runTask(() => playersApi.cleanInventory(actionPlayerId, "CLEAN INVENTORY")), `${playerName}'s inventory was wiped.`, { actionType: "Wipe Inventory", target: playerName, amount: "1" }, "danger");
+      }}>Wipe Inventory</button><button className="danger" disabled={!playerAdmin_canRunLiveAction || playerAdmin_actionResult?.pending} onClick={() => {
+        if (!window.confirm(`Reset ${playerName}'s progression?`)) return;
+        void playerAdmin_runAction("adminReset", `Resetting ${playerName}'s progression`, () => playerAdmin_runTask(() => playersApi.resetProgression(actionPlayerId, "RESET PROGRESSION")), `${playerName}'s progression was reset.`, { actionType: "Reset Progression", target: playerName, amount: "1" }, "danger");
+      }}>Reset Progression</button><InlineActionResult result={playerAdmin_actionResult} resultKey="adminKick" /><InlineActionResult result={playerAdmin_actionResult} resultKey="adminWipe" /><InlineActionResult result={playerAdmin_actionResult} resultKey="adminReset" /></div></div></section><section className="playerAdmin_box"><h4>Movement / Vehicles</h4><p>Use current position to copy known coordinates, edit X/Y/Z if needed, then teleport or spawn a vehicle near the player.</p><div className="playerAdmin_actionRow"><span>Coordinates</span><input value={playerAdmin_coords.x} onChange={(event) => playerAdmin_setCoords({ ...playerAdmin_coords, x: event.target.value })} placeholder="X" /><input value={playerAdmin_coords.y} onChange={(event) => playerAdmin_setCoords({ ...playerAdmin_coords, y: event.target.value })} placeholder="Y" /><input value={playerAdmin_coords.z} onChange={(event) => playerAdmin_setCoords({ ...playerAdmin_coords, z: event.target.value })} placeholder="Z" /><input value={playerAdmin_coords.yaw} onChange={(event) => playerAdmin_setCoords({ ...playerAdmin_coords, yaw: event.target.value })} placeholder="Yaw" /><button disabled={!dbPlayerId || playerAdmin_actionResult?.pending} onClick={() => void playerAdmin_runAction("adminPosition", `Loading ${playerName}'s position`, playerAdmin_useCurrentPosition, "Position loaded. Edit X/Y/Z before teleporting if needed.", { actionType: "Load Position", target: playerName, amount: "1" })}>Use Current Position</button><InlineActionResult result={playerAdmin_actionResult} resultKey="adminPosition" /></div><div className="playerAdmin_actionRow"><span>Teleport</span><button disabled={!playerAdmin_canRunLiveAction || playerAdmin_actionResult?.pending} onClick={() => {
+        if (!window.confirm(`Teleport ${playerName} to X=${playerAdmin_coords.x} Y=${playerAdmin_coords.y} Z=${playerAdmin_coords.z}?`)) return;
+        void playerAdmin_runAction("adminTeleport", `Teleporting ${playerName}`, () => playerAdmin_runTask(() => playersApi.teleport(actionPlayerId, { x: Number(playerAdmin_coords.x), y: Number(playerAdmin_coords.y), z: Number(playerAdmin_coords.z), yaw: Number(playerAdmin_coords.yaw) })), `${playerName} was teleported.`, { actionType: "Teleport", target: playerName, amount: "1" });
+      }}>Teleport</button><InlineActionResult result={playerAdmin_actionResult} resultKey="adminTeleport" /></div><div className="playerAdmin_actionRow"><span>Vehicle</span><select value={playerAdmin_vehicleId} onChange={(event) => { const nextVehicle = event.target.value; playerAdmin_setVehicleId(nextVehicle); playerAdmin_setVehicleTemplate([...(playerAdmin_vehicleCatalog[nextVehicle] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)))[0] || ""); }}>{playerAdmin_vehicleIds.length === 0 && <option value="">Manual Vehicle ID</option>}{playerAdmin_vehicleIds.map((id) => <option key={id} value={id}>{friendlyVehicleName(id)}</option>)}</select><select value={playerAdmin_vehicleTemplate} onChange={(event) => playerAdmin_setVehicleTemplate(event.target.value)}>{playerAdmin_selectedTemplates.length === 0 && <option value="">Manual Template</option>}{playerAdmin_selectedTemplates.map((template) => <option key={template} value={template}>{friendlyVehicleTemplateName(template)}</option>)}</select><button disabled={!playerAdmin_canRunLiveAction || playerAdmin_actionResult?.pending} onClick={() => {
+        const knownTemplates = Object.values(playerAdmin_vehicleCatalog).flat();
+        if (knownTemplates.includes(playerAdmin_vehicleId) && !playerAdmin_vehicleCatalog[playerAdmin_vehicleId]) {
+          playerAdmin_showResult("adminVehicle", `${playerAdmin_vehicleId} is a vehicle template, not a vehicle ID.`, "danger");
+          return;
+        }
+        const vehicleLabel = friendlyVehicleName(playerAdmin_vehicleId);
+        const templateLabel = friendlyVehicleTemplateName(playerAdmin_vehicleTemplate);
+        if (!window.confirm(`Spawn ${vehicleLabel} / ${templateLabel} in front of ${playerName}?`)) return;
+        void playerAdmin_runAction("adminVehicle", `Spawning ${vehicleLabel} for ${playerName}`, () => playerAdmin_runTask(() => playersApi.spawnVehicle(actionPlayerId, { vehicleId: playerAdmin_vehicleId, template: playerAdmin_vehicleTemplate, offset: 400 })), `${vehicleLabel} (${templateLabel}) was spawned for ${playerName}.`, { actionType: "Spawn Vehicle", target: playerName, amount: vehicleLabel });
+      }}>Spawn Vehicle</button><InlineActionResult result={playerAdmin_actionResult} resultKey="adminVehicle" /></div><details className="technical-details"><summary>Advanced manual override</summary><div className="actions-grid"><label>Manual Vehicle ID<input value={playerAdmin_vehicleId} onChange={(event) => playerAdmin_setVehicleId(event.target.value)} placeholder="Sandbike" /></label><label>Manual Template<input value={playerAdmin_vehicleTemplate} onChange={(event) => playerAdmin_setVehicleTemplate(event.target.value)} placeholder="T1_ExtraSeat" /></label></div></details></section>{playerAdmin_toggleBox("admin_log", "Admin Action Log", playerAdmin_actionLog.length ? playerAdmin_table(["Date / Time", "Admin", "Action Type", "Target", "Amount", "Notes"], playerAdmin_actionLog) : <p>No admin actions have been recorded in this layout yet.</p>)}</div>}
+    </section>
+  );
+}
+
 function PlayersPanel({ setTask, onError }: { setTask: (task: Task) => void; onError: (text: string) => void }) {
   const [q, setQ] = useState("");
+  const [playerFilter, setPlayerFilter] = useState<"all" | "online" | "offline">("all");
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
-  const [tab, setTab] = useState("inventory");
-  async function load(online = false) {
+  async function load(filter = playerFilter) {
     onError("");
     try {
-      const result = online ? await playersApi.online() : await playersApi.list(q);
-      setRows(result.rows || []);
+      const result = filter === "online" ? await playersApi.online() : await playersApi.list(q);
+      const nextRows = result.rows || [];
+      setRows(filter === "offline"
+        ? nextRows.filter((row) => String(row.online_status || "").toLowerCase() !== "online")
+        : nextRows);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     }
@@ -1310,32 +1922,21 @@ function PlayersPanel({ setTask, onError }: { setTask: (task: Task) => void; onE
     setDetail(await playersApi.profile(id));
   }
   useEffect(() => {
-    load(false);
+    load("all");
   }, []);
   const dbPlayerId = selected ? String(selected.actor_id || selected.player_pawn_id || selected.id || "") : "";
   const actionPlayerId = selected ? String(selected.action_player_id || selected.funcom_id || selected.fls_id || selected.account_id || "") : "";
   return (
     <section className="panel">
-      <div className="panel-title"><h2>Players</h2><div className="action-row"><button onClick={() => load(false)}>Refresh Players</button><button onClick={() => load(true)}>Online Only</button></div></div>
-      <div className="action-row"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search character, FLS ID, account id, or actor id" /><button onClick={() => load(false)}>Search</button></div>
+      <div className="panel-title"><h2>Players</h2><div className="action-row"><button onClick={() => load(playerFilter)}>Refresh Players</button><label className="inline-filter-label">Filter <select value={playerFilter} onChange={(event) => { const nextFilter = event.target.value as "all" | "online" | "offline"; setPlayerFilter(nextFilter); load(nextFilter); }}><option value="all">All Players</option><option value="online">Online</option><option value="offline">Offline</option></select></label></div></div>
+      <div className="action-row"><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search character, FLS ID, account id, or actor id" /><button onClick={() => load(playerFilter)}>Search</button></div>
       <DataTable rows={rows} columns={["actor_id", "character_name", "account_id", "action_player_id", "online_status", "map", "fls_id"]} onRowClick={open} />
-      {selected && <section className="drawer">
-        <div className="panel-title"><h3>{String(selected.character_name || selected.actor_id)}</h3><button onClick={() => setSelected(null)}>Close</button></div>
-        <div className="two-col">
-          <p><strong>DB actor/player ID:</strong> {dbPlayerId || "missing"}</p>
-          <p><strong>Admin action ID:</strong> {actionPlayerId || "missing"}</p>
-        </div>
-        <PlayerSummary detail={detail} fallback={selected} dbPlayerId={dbPlayerId} actionPlayerId={actionPlayerId} />
-        <PlayerCapabilities capabilities={(detail?.capabilities as Record<string, unknown> | undefined) || {}} />
-        <div className="action-row">{["inventory", "currency", "factions", "specs", "position", "progression", "events", "stats", "history"].map((name) => <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{friendlyTabName(name)}</button>)}</div>
-        <PlayerDetailTab playerId={dbPlayerId} tab={tab} onError={onError} />
-        <PlayerActions dbPlayerId={dbPlayerId} actionPlayerId={actionPlayerId} setTask={setTask} onError={onError} onRefresh={() => open(selected)} />
-      </section>}
+      {selected && <CharacterAdminUI detail={detail} fallback={selected} dbPlayerId={dbPlayerId} actionPlayerId={actionPlayerId} playerName={String(selected.character_name || actionPlayerId || dbPlayerId || "Selected player")} setTask={setTask} onError={onError} onRefresh={() => open(selected)} onClose={() => setSelected(null)} />}
     </section>
   );
 }
 
-function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh }: { dbPlayerId: string; actionPlayerId: string; setTask: (task: Task) => void; onError: (text: string) => void; onRefresh: () => void }) {
+function PlayerActions({ dbPlayerId, actionPlayerId, playerName, setTask, onError, onRefresh }: { dbPlayerId: string; actionPlayerId: string; playerName: string; setTask: (task: Task) => void; onError: (text: string) => void; onRefresh: () => void }) {
   const [itemName, setItemName] = useState("");
   const [itemId, setItemId] = useState("");
   const [selectedItem, setSelectedItem] = useState<CatalogItem | null>(null);
@@ -1354,13 +1955,27 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
   const [currency, setCurrency] = useState({ currencyId: "0", amount: "1" });
   const [faction, setFaction] = useState({ factionId: "1", amount: "1" });
   const [refuelVehicleId, setRefuelVehicleId] = useState("");
-  const [result, setResult] = useState("");
-  const [resultDetails, setResultDetails] = useState("");
+  const [actionResult, setActionResult] = useState<{ key: string; tone: "success" | "danger" | "neutral"; text: string; pending?: boolean } | null>(null);
+  const resultTimer = useRef<number | null>(null);
   async function run(action: () => Promise<unknown>) {
     onError("");
-    setResult("");
-    setResultDetails("");
-    try { await action(); } catch (error) { const text = error instanceof Error ? error.message : String(error); setResult(text); onError(text); }
+    try { await action(); } catch (error) { showPlayerActionResult("general", friendlyInlineError(error), "danger"); }
+  }
+  function showPlayerActionResult(key: string, text: string, tone: "success" | "danger" | "neutral" = "success", pending = false) {
+    setActionResult({ key, text, tone, pending });
+    if (resultTimer.current) window.clearTimeout(resultTimer.current);
+    resultTimer.current = null;
+    if (!pending) resultTimer.current = window.setTimeout(() => setActionResult(null), 5000);
+  }
+  async function runPlayerAction(key: string, pendingText: string, action: () => Promise<unknown>, successText: string, successTone: "success" | "danger" = "success", failureText?: string | ((error: unknown) => string)) {
+    onError("");
+    showPlayerActionResult(key, pendingText, "neutral", true);
+    try {
+      await action();
+      showPlayerActionResult(key, successText, successTone);
+    } catch (error) {
+      showPlayerActionResult(key, typeof failureText === "function" ? failureText(error) : failureText || friendlyInlineError(error), "danger");
+    }
   }
   async function runTask(action: () => Promise<{ task: Task }>) {
     const response = await action();
@@ -1370,9 +1985,8 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
   }
   async function runDirect(action: () => Promise<unknown>) {
     const response = await action();
-    setResult(formatMutationResult(response));
-    setResultDetails(JSON.stringify(response, null, 2));
     onRefresh();
+    return response;
   }
   function choosePlayerItem(item: CatalogItem | null) {
     setSelectedItem(item);
@@ -1396,32 +2010,37 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
     const yaw = firstDefined(position.yaw, position.Yaw, position.rotation_yaw, position.rot_yaw, 0);
     if (x === undefined || y === undefined || z === undefined) throw new Error("Current position is not available from the detected player position schema.");
     setCoords({ x: String(x), y: String(y), z: String(z), yaw: String(yaw ?? 0) });
-    setResult("Teleport coordinates filled from the selected player's current DB position. Yaw defaults to 0 when unavailable.");
   }
+  useEffect(() => () => { if (resultTimer.current) window.clearTimeout(resultTimer.current); }, []);
   useEffect(() => {
     adminApi.structuredVehicles().then((response) => {
       const parsed = Object.fromEntries((response.vehicles || []).map((vehicle) => [vehicle.id || vehicle.name, vehicle.templates || []]).filter(([id]) => id));
       setVehicleCatalog(parsed);
-      const firstVehicle = Object.keys(parsed)[0] || "";
+      const firstVehicle = Object.keys(parsed).sort((a, b) => friendlyVehicleName(a).localeCompare(friendlyVehicleName(b)))[0] || "";
       if (firstVehicle && !vehicleId) {
         setVehicleId(firstVehicle);
-        setVehicleTemplate(parsed[firstVehicle]?.[0] || "");
+        setVehicleTemplate([...(parsed[firstVehicle] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)))[0] || "");
       }
     }).catch(() => {
       adminApi.vehicles("").then((response) => {
         const parsed = parseVehicleCatalog(response.stdout || "");
         setVehicleCatalog(parsed);
+        const firstVehicle = Object.keys(parsed).sort((a, b) => friendlyVehicleName(a).localeCompare(friendlyVehicleName(b)))[0] || "";
+        if (firstVehicle && !vehicleId) {
+          setVehicleId(firstVehicle);
+          setVehicleTemplate([...(parsed[firstVehicle] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)))[0] || "");
+        }
       }).catch(() => undefined);
     });
   }, []);
-  const vehicleIds = Object.keys(vehicleCatalog);
-  const selectedTemplates = vehicleCatalog[vehicleId] || [];
+  const vehicleIds = Object.keys(vehicleCatalog).sort((a, b) => friendlyVehicleName(a).localeCompare(friendlyVehicleName(b)));
+  const selectedTemplates = [...(vehicleCatalog[vehicleId] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)));
   const canRunCliAction = Boolean(actionPlayerId);
   const cliDisabledReason = "This player row is missing a Funcom/FLS admin action ID. CLI-backed actions are disabled to avoid sending the DB actor ID to dune admin.";
   return <section className="action-panel">
     <h3>Player Actions</h3>
     {!canRunCliAction && <p className="danger-note">{cliDisabledReason}</p>}
-    {result && <div className="result-panel"><strong>Action Result</strong><p>{result}</p>{resultDetails && <TechnicalDetails text={resultDetails} />}</div>}
+    <InlineActionResult result={actionResult} resultKey="general" />
     <div className="action-sections">
       <section className="action-section">
         <h4>Give Items</h4>
@@ -1430,11 +2049,19 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
         <div className="action-line item-grant-row">
           <label className="compact-field">Quantity<input type="number" min="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
           <label className="compact-field">Durability<input type="number" min="0" value={durability} onChange={(event) => setDurability(event.target.value)} /></label>
-          <button disabled={!canRunCliAction || !selectedItem} title={!canRunCliAction ? cliDisabledReason : !selectedItem ? "Select an item from the catalog first." : undefined} onClick={() => run(async () => { if (window.confirm(`Give ${quantity} x ${itemName} to player ${actionPlayerId}?`)) await runTask(() => playersApi.giveItem(actionPlayerId, { itemName, quantity: Number(quantity), durability: Number(durability) })); })}>Give Item</button>
+          <button disabled={!canRunCliAction || !selectedItem || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : !selectedItem ? "Select an item from the catalog first." : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Give ${quantity} x ${itemName} to ${playerName}?`)) return;
+            await runPlayerAction("giveItem", `Giving x${Number(quantity) || 1} ${itemName} to ${playerName}`, () => runTask(() => playersApi.giveItem(actionPlayerId, { itemName, quantity: Number(quantity), durability: Number(durability) })), `x${Number(quantity) || 1} ${itemName} was granted to ${playerName}.`, "success", (error) => `Failed to grant x${Number(quantity) || 1} ${itemName} to ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Give Item</button>
+          <InlineActionResult result={actionResult} resultKey="giveItem" />
         </div>
         <details className="technical-details"><summary>Developer manual item ID</summary><div className="actions-grid">
           <label>Raw Item ID<input value={itemId} onChange={(event) => setItemId(event.target.value)} /></label>
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Give raw item id ${itemId} to player ${actionPlayerId}?`)) await runTask(() => playersApi.giveItemId(actionPlayerId, { itemId, quantity: Number(quantity), durability: 1 })); })}>Give Item by ID</button>
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Give raw item id ${itemId} to ${playerName}?`)) return;
+            await runPlayerAction("giveItemId", `Giving x${Number(quantity) || 1} ${itemId} to ${playerName}`, () => runTask(() => playersApi.giveItemId(actionPlayerId, { itemId, quantity: Number(quantity), durability: 1 })), `x${Number(quantity) || 1} ${itemId} was granted to ${playerName}.`, "success", (error) => `Failed to grant x${Number(quantity) || 1} ${itemId} to ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Give Item by ID</button>
+          <InlineActionResult result={actionResult} resultKey="giveItemId" />
         </div></details>
         <h4>Give Multiple Items</h4>
         <div className="action-line">
@@ -1443,23 +2070,42 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
         </div>
         {multiList.length ? <div className="table-wrap package-items-table"><table><thead><tr><th>Item Name</th><th>Item ID</th><th>Quantity</th><th>Durability</th><th>Actions</th></tr></thead><tbody>{multiList.map((item, index) => <tr key={`${item.itemName || item.itemId}-${index}`}><td>{catalogItemName(item)}</td><td>{catalogItemId(item)}</td><td>{item.quantity}</td><td>{item.durability}</td><td><button className="danger" onClick={() => setMultiList(multiList.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></td></tr>)}</tbody></table></div> : <div className="empty">No multi-item entries yet. Search/select an item, set quantity, then Add Selected Item.</div>}
         <details className="technical-details"><summary>Developer raw multi-item textarea</summary><label>Multiple Items<textarea value={multiItems} onChange={(event) => setMultiItems(event.target.value)} placeholder="One item per line: name or raw id, quantity, durability" rows={4} /></label></details>
-        <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { const items = parsedMultiItems(); if (window.confirm(`Give ${items.length} item entries to player ${actionPlayerId}?`)) await runDirect(() => playersApi.giveItems(actionPlayerId, items)); })}>Give Multiple Items</button>
+        <div className="action-line">
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            const items = parsedMultiItems();
+            if (!window.confirm(`Give ${items.length} item entries to ${playerName}?`)) return;
+            await runPlayerAction("giveMultiple", `Giving ${items.length} item entries to ${playerName}`, () => runDirect(() => playersApi.giveItems(actionPlayerId, items)), `${items.length} item entr${items.length === 1 ? "y was" : "ies were"} granted to ${playerName}.`, "success", (error) => `Failed to grant items to ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Give Multiple Items</button>
+          <InlineActionResult result={actionResult} resultKey="giveMultiple" />
+        </div>
       </section>
 
       <section className="action-section">
         <h4>XP / Skills</h4>
         <div className="action-line">
           <label>XP Amount<input value={xp} onChange={(event) => setXp(event.target.value)} /></label>
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Add ${xp} XP to player ${actionPlayerId}?`)) await runTask(() => playersApi.addXp(actionPlayerId, Number(xp))); })}>Add XP</button>
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Add ${xp} XP to ${playerName}?`)) return;
+            await runPlayerAction("xp", `Adding ${Number(xp) || 0} XP to ${playerName}`, () => runTask(() => playersApi.addXp(actionPlayerId, Number(xp))), `${playerName} received ${Number(xp) || 0} XP.`, "success", (error) => `Failed to add ${Number(xp) || 0} XP to ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Add XP</button>
+          <InlineActionResult result={actionResult} resultKey="xp" />
         </div>
         <div className="action-line">
           <label>Skill Points<input value={points} onChange={(event) => setPoints(event.target.value)} /></label>
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Set player ${actionPlayerId} to ${points} unspent skill points?`)) await runTask(() => playersApi.setSkillPoints(actionPlayerId, Number(points))); })}>Set Skill Points</button>
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Set ${playerName} to ${points} unspent skill points?`)) return;
+            await runPlayerAction("skillPoints", `Setting ${playerName}'s skill points to ${Number(points) || 0}`, () => runTask(() => playersApi.setSkillPoints(actionPlayerId, Number(points))), `${playerName}'s skill points were updated.`, "success", (error) => `Failed to update ${playerName}'s skill points. ${friendlyInlineError(error)}`);
+          })}>Set Skill Points</button>
+          <InlineActionResult result={actionResult} resultKey="skillPoints" />
         </div>
         <div className="action-line">
           <label>Skill Module<input value={module} onChange={(event) => setModule(event.target.value)} /></label>
           <label>Level<input value={level} onChange={(event) => setLevel(event.target.value)} /></label>
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Set ${module} to level ${level} for player ${actionPlayerId}?`)) await runTask(() => playersApi.setSkillModule(actionPlayerId, { module, level: Number(level) })); })}>Set Skill Module</button>
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Set ${module} to level ${level} for ${playerName}?`)) return;
+            await runPlayerAction("skillModule", `Setting ${module} to level ${Number(level) || 0} for ${playerName}`, () => runTask(() => playersApi.setSkillModule(actionPlayerId, { module, level: Number(level) })), `${playerName}'s ${module} module was updated.`, "success", (error) => `Failed to update ${playerName}'s ${module} module. ${friendlyInlineError(error)}`);
+          })}>Set Skill Module</button>
+          <InlineActionResult result={actionResult} resultKey="skillModule" />
         </div>
       </section>
 
@@ -1467,7 +2113,11 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
         <h4>Survival</h4>
         <p>Give Water uses the live admin CLI and was verified in-game.</p>
         <div className="action-line">
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Give water to player ${actionPlayerId}?`)) await runTask(() => playersApi.refillWater(actionPlayerId)); })}>Give Water</button>
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Give water to ${playerName}?`)) return;
+            await runPlayerAction("water", `Giving water to ${playerName}`, () => runTask(() => playersApi.refillWater(actionPlayerId)), `${playerName}'s water was filled successfully.`, "success", (error) => `Failed to give water to ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Give Water</button>
+          <InlineActionResult result={actionResult} resultKey="water" />
         </div>
       </section>
 
@@ -1479,23 +2129,34 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
           <label>Y<input value={coords.y} onChange={(event) => setCoords({ ...coords, y: event.target.value })} /></label>
           <label>Z<input value={coords.z} onChange={(event) => setCoords({ ...coords, z: event.target.value })} /></label>
           <label>Yaw<input value={coords.yaw} onChange={(event) => setCoords({ ...coords, yaw: event.target.value })} /></label>
-          <button onClick={() => run(useCurrentPosition)}>Use Current Position</button>
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Teleport player ${actionPlayerId} to X=${coords.x} Y=${coords.y} Z=${coords.z}?`)) await runTask(() => playersApi.teleport(actionPlayerId, { x: Number(coords.x), y: Number(coords.y), z: Number(coords.z), yaw: Number(coords.yaw) })); })}>Teleport</button>
+          <button onClick={() => run(async () => {
+            await runPlayerAction("position", `Loading ${playerName}'s position`, useCurrentPosition, "Position loaded. Edit X/Y/Z before teleporting if needed.");
+          })}>Use Current Position</button>
+          <InlineActionResult result={actionResult} resultKey="position" />
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Teleport ${playerName} to X=${coords.x} Y=${coords.y} Z=${coords.z}?`)) return;
+            await runPlayerAction("teleport", `Teleporting ${playerName}`, () => runTask(() => playersApi.teleport(actionPlayerId, { x: Number(coords.x), y: Number(coords.y), z: Number(coords.z), yaw: Number(coords.yaw) })), `${playerName} was teleported.`, "success", (error) => `Failed to teleport ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Teleport</button>
+          <InlineActionResult result={actionResult} resultKey="teleport" />
         </div>
         <div className="action-line">
-          <label>Vehicle<select value={vehicleId} onChange={(event) => { const nextVehicle = event.target.value; setVehicleId(nextVehicle); setVehicleTemplate(vehicleCatalog[nextVehicle]?.[0] || ""); }}>
+          <label>Vehicle<select value={vehicleId} onChange={(event) => { const nextVehicle = event.target.value; setVehicleId(nextVehicle); setVehicleTemplate([...(vehicleCatalog[nextVehicle] || [])].sort((a, b) => friendlyVehicleTemplateName(a).localeCompare(friendlyVehicleTemplateName(b)))[0] || ""); }}>
             {vehicleIds.length === 0 && <option value="">Manual vehicle ID</option>}
-            {vehicleIds.map((id) => <option key={id} value={id}>{id}</option>)}
+            {vehicleIds.map((id) => <option key={id} value={id}>{friendlyVehicleName(id)}</option>)}
           </select></label>
           <label>Template<select value={vehicleTemplate} onChange={(event) => setVehicleTemplate(event.target.value)}>
             {selectedTemplates.length === 0 && <option value="">Manual template</option>}
-            {selectedTemplates.map((template) => <option key={template} value={template}>{template}</option>)}
+            {selectedTemplates.map((template) => <option key={template} value={template}>{friendlyVehicleTemplateName(template)}</option>)}
           </select></label>
-          <button disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+          <button disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
             const knownTemplates = Object.values(vehicleCatalog).flat();
             if (knownTemplates.includes(vehicleId) && !vehicleCatalog[vehicleId]) throw new Error(`${vehicleId} is a vehicle template, not a vehicle ID. Choose a vehicle such as Sandbike, then choose ${vehicleId} as the template.`);
-            if (window.confirm(`Spawn ${vehicleId}/${vehicleTemplate} in front of player ${actionPlayerId}?`)) await runTask(() => playersApi.spawnVehicle(actionPlayerId, { vehicleId, template: vehicleTemplate, offset: 400 }));
+            const vehicleLabel = friendlyVehicleName(vehicleId);
+            const templateLabel = friendlyVehicleTemplateName(vehicleTemplate);
+            if (!window.confirm(`Spawn ${vehicleLabel} / ${templateLabel} in front of ${playerName}?`)) return;
+            await runPlayerAction("vehicle", `Spawning ${vehicleLabel} for ${playerName}`, () => runTask(() => playersApi.spawnVehicle(actionPlayerId, { vehicleId, template: vehicleTemplate, offset: 400 })), `${vehicleLabel} (${templateLabel}) was spawned for ${playerName}.`, "success", (error) => `Failed to spawn ${vehicleLabel} for ${playerName}. ${friendlyInlineError(error)}`);
           })}>Spawn Vehicle</button>
+          <InlineActionResult result={actionResult} resultKey="vehicle" />
         </div>
         <details className="technical-details">
           <summary>Advanced manual override</summary>
@@ -1512,12 +2173,20 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
         <div className="action-line">
           <label>Currency ID<input value={currency.currencyId} onChange={(event) => setCurrency({ ...currency, currencyId: event.target.value })} /></label>
           <label>Currency Amount<input value={currency.amount} onChange={(event) => setCurrency({ ...currency, amount: event.target.value })} /></label>
-          <button onClick={() => run(async () => { if (window.confirm(`Add ${currency.amount} currency ${currency.currencyId || "Solaris"} to DB player ${dbPlayerId}? A backup will be created first.`)) await runDirect(() => playersApi.addCurrency(dbPlayerId, { currencyId: Number(currency.currencyId || 0), amount: Number(currency.amount), confirmation: "ADD CURRENCY" })); })}>Add Currency</button>
+          <button disabled={actionResult?.pending} onClick={() => run(async () => {
+            if (!window.confirm(`Add ${currency.amount} currency ${currency.currencyId || "Solaris"} to ${playerName}? A backup will be created first.`)) return;
+            await runPlayerAction("currency", `Adding currency to ${playerName}`, () => runDirect(() => playersApi.addCurrency(dbPlayerId, { currencyId: Number(currency.currencyId || 0), amount: Number(currency.amount), confirmation: "ADD CURRENCY" })), `${playerName}'s currency was updated.`, "success", (error) => `Failed to update ${playerName}'s currency. ${friendlyInlineError(error)}`);
+          })}>Add Currency</button>
+          <InlineActionResult result={actionResult} resultKey="currency" />
         </div>
         <div className="action-line">
           <label>Faction ID<input value={faction.factionId} onChange={(event) => setFaction({ ...faction, factionId: event.target.value })} /></label>
           <label>Reputation Amount<input value={faction.amount} onChange={(event) => setFaction({ ...faction, amount: event.target.value })} /></label>
-          <button onClick={() => run(async () => { if (window.confirm(`Add ${faction.amount} reputation for faction ${faction.factionId} to DB player ${dbPlayerId}? A backup will be created first.`)) await runDirect(() => playersApi.addFactionReputation(dbPlayerId, { factionId: Number(faction.factionId), amount: Number(faction.amount), confirmation: "ADD FACTION REPUTATION" })); })}>Add Faction Reputation</button>
+          <button disabled={actionResult?.pending} onClick={() => run(async () => {
+            if (!window.confirm(`Add ${faction.amount} reputation for faction ${faction.factionId} to ${playerName}? A backup will be created first.`)) return;
+            await runPlayerAction("faction", `Adding faction reputation to ${playerName}`, () => runDirect(() => playersApi.addFactionReputation(dbPlayerId, { factionId: Number(faction.factionId), amount: Number(faction.amount), confirmation: "ADD FACTION REPUTATION" })), `${playerName}'s faction reputation was updated.`, "success", (error) => `Failed to update ${playerName}'s faction reputation. ${friendlyInlineError(error)}`);
+          })}>Add Faction Reputation</button>
+          <InlineActionResult result={actionResult} resultKey="faction" />
         </div>
       </section>
 
@@ -1525,11 +2194,19 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
         <h4>Repair / Refuel</h4>
         <p>Offline DB-backed repair/refuel actions create a backup first.</p>
         <div className="action-line">
-          <button onClick={() => run(async () => { if (window.confirm(`Repair gear for offline DB player ${dbPlayerId}? A backup will be created first.`)) await runDirect(() => playersApi.repairGear(dbPlayerId, "REPAIR GEAR")); })}>Repair Gear</button>
+          <button disabled={actionResult?.pending} onClick={() => run(async () => {
+            if (!window.confirm(`Repair gear for ${playerName}? A backup will be created first.`)) return;
+            await runPlayerAction("repair", `Repairing ${playerName}'s gear`, () => runDirect(() => playersApi.repairGear(dbPlayerId, "REPAIR GEAR")), `${playerName}'s gear was repaired.`, "success", (error) => `Failed to repair ${playerName}'s gear. ${friendlyInlineError(error)}`);
+          })}>Repair Gear</button>
+          <InlineActionResult result={actionResult} resultKey="repair" />
         </div>
         <div className="action-line">
           <label>Refuel Vehicle Actor ID<input value={refuelVehicleId} onChange={(event) => setRefuelVehicleId(event.target.value)} /></label>
-          <button onClick={() => run(async () => { if (window.confirm(`Refuel vehicle ${refuelVehicleId} owned by DB player ${dbPlayerId}? A backup will be created first.`)) await runDirect(() => playersApi.refuelVehicle(dbPlayerId, { vehicleId: refuelVehicleId, confirmation: "REFUEL VEHICLE" })); })}>Refuel Vehicle</button>
+          <button disabled={actionResult?.pending} onClick={() => run(async () => {
+            if (!window.confirm(`Refuel vehicle ${refuelVehicleId} owned by ${playerName}? A backup will be created first.`)) return;
+            await runPlayerAction("refuel", `Refueling vehicle ${refuelVehicleId}`, () => runDirect(() => playersApi.refuelVehicle(dbPlayerId, { vehicleId: refuelVehicleId, confirmation: "REFUEL VEHICLE" })), `Vehicle ${refuelVehicleId} was refueled.`, "success", (error) => `Failed to refuel vehicle ${refuelVehicleId}. ${friendlyInlineError(error)}`);
+          })}>Refuel Vehicle</button>
+          <InlineActionResult result={actionResult} resultKey="refuel" />
         </div>
       </section>
 
@@ -1537,9 +2214,19 @@ function PlayerActions({ dbPlayerId, actionPlayerId, setTask, onError, onRefresh
         <h4>Dangerous Actions</h4>
         <p>These live CLI actions are destructive or disruptive and still require backend confirmation phrases.</p>
         <div className="action-row">
-          <button className="danger" disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Kick player ${actionPlayerId}?`)) await runTask(() => playersApi.kick(actionPlayerId)); })}>Kick Player</button>
-          <button className="danger" disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Clean inventory for player ${actionPlayerId}? This removes carried items.`)) await runTask(() => playersApi.cleanInventory(actionPlayerId, "CLEAN INVENTORY")); })}>Clean Inventory</button>
-          <button className="danger" disabled={!canRunCliAction} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => { if (window.confirm(`Reset progression for player ${actionPlayerId}?`)) await runTask(() => playersApi.resetProgression(actionPlayerId, "RESET PROGRESSION")); })}>Reset Progression</button>
+          <button className="danger" disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Kick ${playerName}?`)) return;
+            await runPlayerAction("danger", `Kicking ${playerName}`, () => runTask(() => playersApi.kick(actionPlayerId)), `${playerName} was kicked from the server.`, "danger", (error) => `Failed to kick ${playerName}. ${friendlyInlineError(error)}`);
+          })}>Kick Player</button>
+          <button className="danger" disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Clean inventory for ${playerName}? This removes carried items.`)) return;
+            await runPlayerAction("danger", `Cleaning ${playerName}'s inventory`, () => runTask(() => playersApi.cleanInventory(actionPlayerId, "CLEAN INVENTORY")), `${playerName}'s inventory was cleaned.`, "danger", (error) => `Failed to clean ${playerName}'s inventory. ${friendlyInlineError(error)}`);
+          })}>Clean Inventory</button>
+          <button className="danger" disabled={!canRunCliAction || actionResult?.pending} title={!canRunCliAction ? cliDisabledReason : undefined} onClick={() => run(async () => {
+            if (!window.confirm(`Reset progression for ${playerName}?`)) return;
+            await runPlayerAction("danger", `Resetting ${playerName}'s progression`, () => runTask(() => playersApi.resetProgression(actionPlayerId, "RESET PROGRESSION")), `${playerName}'s progression was reset.`, "danger", (error) => `Failed to reset ${playerName}'s progression. ${friendlyInlineError(error)}`);
+          })}>Reset Progression</button>
+          <InlineActionResult result={actionResult} resultKey="danger" />
         </div>
       </section>
     </div>
@@ -5430,6 +6117,31 @@ function friendlyInlineError(error: unknown) {
   return text.replace(/^Error:\s*/i, "").trim() || "Action failed.";
 }
 
+function playerAdmin_taskFailureMessage(task: Task) {
+  const text = [task.errorMessage, task.progressMessage, ...(task.logLines || []).map((row) => row.line)].filter(Boolean).join("\n");
+  if (/player.*offline|offline|not online|online player|no route|no recipient/i.test(text)) return "The player appears to be offline, so this live admin action could not be delivered.";
+  if (/failed with exit \d+/i.test(text)) return "The live admin command failed. Make sure the selected player is online and try again.";
+  return "The player action failed.";
+}
+
+function playerAdmin_friendlyFailure(error: unknown, actionName: string, playerName: string) {
+  const text = friendlyInlineError(error);
+  if (/player.*offline|offline|not online|online player|no route|no recipient/i.test(text)) return `${playerName} appears to be offline, so ${actionName.toLowerCase()} could not be delivered.`;
+  if (/failed with exit \d+|^dune\s+admin\b/i.test(text)) return `${actionName} failed for ${playerName}. Make sure the player is online and try again.`;
+  return text || `${actionName} failed for ${playerName}.`;
+}
+
+function playerAdmin_bulkItemFailure(results: Record<string, unknown>[] = []) {
+  const failed = results.filter((row) => !row.ok);
+  if (!failed.length) return "No items were granted.";
+  const first = failed[0];
+  const item = first.item && typeof first.item === "object" ? first.item as Record<string, unknown> : {};
+  const itemName = item.itemName || item.itemId || "item";
+  const error = String(first.error || "").replace(/^Error:\s*/i, "").trim();
+  if (/offline|not online|failed with exit \d+|^dune\s+admin\b/i.test(error)) return `Failed to grant ${itemName}. Make sure the player is online and try again.`;
+  return `Failed to grant ${itemName}.${error ? ` ${error}` : ""}`;
+}
+
 function adminTaskFailureDetail(task: Task) {
   const lines = [...(task.logLines || [])].reverse().map((row) => String(row.line || "").trim()).filter(Boolean);
   const usefulLines = lines.filter((line) =>
@@ -5482,6 +6194,33 @@ function titleCaseWords(value: string) {
     if (index > 0 && smallWords.has(lower)) return lower;
     return lower ? lower.charAt(0).toUpperCase() + lower.slice(1) : word;
   }).join(" ");
+}
+
+function friendlyVehicleName(value: string) {
+  const labels: Record<string, string> = {
+    Buggy: "Buggy",
+    ContainerVehicle: "Container Vehicle",
+    OrnithopterLight: "Light Ornithopter",
+    OrnithopterMedium: "Medium Ornithopter",
+    OrnithopterTransport: "Transport Ornithopter",
+    Sandbike: "Sandbike",
+    Sandcrawler: "Sandcrawler",
+    Tank: "Tank",
+    TreadWheel: "Treadwheel"
+  };
+  const raw = String(value || "").trim();
+  return labels[raw] || titleCaseWords(raw.replace(/([a-z])([A-Z])/g, "$1 $2"));
+}
+
+function friendlyVehicleTemplateName(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Manual Template";
+  if (raw === "Container") return "Container";
+  const match = /^T(\d+)(?:_(.+))?$/.exec(raw);
+  if (!match) return titleCaseWords(raw.replace(/([a-z])([A-Z])/g, "$1 $2"));
+  const tier = `Tier ${match[1]}`;
+  const suffix = match[2] ? titleCaseWords(match[2].replace(/([a-z])([A-Z])/g, "$1 $2")) : "Standard";
+  return `${tier} ${suffix}`;
 }
 
 function escapeRegExp(value: string) {
@@ -5636,15 +6375,6 @@ function parseSkillModuleRows(text: string): Record<string, unknown>[] {
 
 function friendlyCatalogName(value: string) {
   return value.replace(/^[-*]\s*/, "").replace(/^\/Game\/.*\//, "").replaceAll("_", " ").trim();
-}
-
-function friendlyVehicleName(value: string) {
-  return {
-    OrnithopterLight: "Light Ornithopter",
-    OrnithopterMedium: "Medium Ornithopter",
-    OrnithopterTransport: "Transport Ornithopter",
-    ContainerVehicle: "Container Vehicle"
-  }[value] || value.replaceAll("_", " ");
 }
 
 function splitTemplateList(text: string) {

@@ -587,6 +587,322 @@ export async function addFactionReputation(db, id, { factionId, amount }) {
   });
 }
 
+export async function addIntel(db, id, { amount }) {
+  await requireCapability(await supportsIntelMutation(db), "Intel mutation requires dune.actors.properties with TechKnowledgePlayerComponent.");
+  const delta = intParam(amount, "intel amount", -1000000000, 1000000000);
+  if (delta === 0) throw new Error("Intel amount cannot be zero");
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    const current = await tx.query(`
+      select (properties->'TechKnowledgePlayerComponent'->>'m_TechKnowledgePoints')::bigint as intel
+      from dune.actors
+      where id = $1 and properties ? 'TechKnowledgePlayerComponent'`, [player.actorId]);
+    if (!current.rows.length) throw new UnsupportedCapabilityError(`TechKnowledgePlayerComponent not found for player ${player.actorId}.`);
+    const oldValue = Number(current.rows[0]?.intel || 0);
+    const nextValue = Math.max(0, oldValue + delta);
+    await tx.query(`
+      update dune.actors
+      set properties = jsonb_set(properties, '{TechKnowledgePlayerComponent,m_TechKnowledgePoints}', to_jsonb($2::bigint))
+      where id = $1 and properties ? 'TechKnowledgePlayerComponent'`, [player.actorId, nextValue]);
+    return { ok: true, player, oldValue, newValue: nextValue, amount: delta };
+  });
+}
+
+export async function playerCraftingRecipes(db, id) {
+  await requireCapability(await supportsCraftingRecipes(db), "Crafting recipes require dune.actors.properties with CraftingRecipesLibraryActorComponent.");
+  const player = await resolvePlayerMutationTarget(db, id);
+  const result = await db.query(`
+    with all_recipes as (
+      select distinct on (recipe->'BaseRecipeId'->>'Name')
+             recipe->'BaseRecipeId'->>'Name' as recipe_id,
+             coalesce(nullif(recipe->>'m_Source', ''), 'Unknown') as source,
+             case when recipe->>'m_QualityLevel' ~ '^-?[0-9]+$' then (recipe->>'m_QualityLevel')::int else 0 end as quality_level
+      from dune.actors a
+      cross join lateral jsonb_array_elements(coalesce(a.properties->'CraftingRecipesLibraryActorComponent'->'m_KnownItemRecipes', '[]'::jsonb)) recipe
+      where recipe->'BaseRecipeId'->>'Name' is not null
+      order by recipe->'BaseRecipeId'->>'Name', coalesce(nullif(recipe->>'m_Source', ''), 'Unknown')
+    ),
+    player_recipes as (
+      select recipe->'BaseRecipeId'->>'Name' as recipe_id
+      from dune.actors a
+      cross join lateral jsonb_array_elements(coalesce(a.properties->'CraftingRecipesLibraryActorComponent'->'m_KnownItemRecipes', '[]'::jsonb)) recipe
+      where a.id = $1 and recipe->'BaseRecipeId'->>'Name' is not null
+    )
+    select all_recipes.recipe_id,
+           all_recipes.source,
+           all_recipes.quality_level,
+           (player_recipes.recipe_id is not null) as unlocked
+    from all_recipes
+    left join player_recipes on player_recipes.recipe_id = all_recipes.recipe_id
+    order by all_recipes.recipe_id`, [player.actorId]);
+  return {
+    capabilities: { craftingRecipes: true },
+    player,
+    rows: result.rows.map((row) => ({
+      recipeId: row.recipe_id,
+      displayName: recipeDisplayName(row.recipe_id),
+      category: recipeCategory(row.recipe_id),
+      source: row.source || "Unknown",
+      qualityLevel: Number(row.quality_level || 0),
+      unlocked: Boolean(row.unlocked)
+    }))
+  };
+}
+
+export async function unlockCraftingRecipe(db, id, { recipeId }) {
+  await requireCapability(await supportsCraftingRecipes(db), "Crafting recipes require dune.actors.properties with CraftingRecipesLibraryActorComponent.");
+  const safeRecipeId = validateRecipeId(recipeId);
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    const known = await tx.query(`
+      select exists (
+        select 1
+        from dune.actors a
+        cross join lateral jsonb_array_elements(coalesce(a.properties->'CraftingRecipesLibraryActorComponent'->'m_KnownItemRecipes', '[]'::jsonb)) recipe
+        where recipe->'BaseRecipeId'->>'Name' = $1
+      ) as exists`, [safeRecipeId]);
+    if (!known.rows[0]?.exists) throw new Error(`Crafting recipe ${safeRecipeId} was not found in the game database.`);
+    const current = await tx.query(`
+      select properties->'CraftingRecipesLibraryActorComponent'->'m_KnownItemRecipes' as recipes
+      from dune.actors
+      where id = $1 and properties ? 'CraftingRecipesLibraryActorComponent'
+      for update`, [player.actorId]);
+    if (!current.rows.length) throw new UnsupportedCapabilityError(`CraftingRecipesLibraryActorComponent not found for player ${player.actorId}.`);
+    const recipes = Array.isArray(current.rows[0]?.recipes) ? current.rows[0].recipes : [];
+    if (recipes.some((recipe) => recipe?.BaseRecipeId?.Name === safeRecipeId)) {
+      return { ok: true, player, recipeId: safeRecipeId, alreadyUnlocked: true };
+    }
+    const nextRecipes = [...recipes, {
+      m_Source: "SchematicPickup",
+      m_bIsNew: true,
+      BaseRecipeId: { Name: safeRecipeId },
+      m_QualityLevel: 0,
+      m_NumberOfRecipeUses: 0,
+      m_bIsLimitedUseRecipe: false
+    }];
+    await tx.query(`
+      update dune.actors
+      set properties = jsonb_set(properties, '{CraftingRecipesLibraryActorComponent,m_KnownItemRecipes}', $2::jsonb, true)
+      where id = $1 and properties ? 'CraftingRecipesLibraryActorComponent'`, [player.actorId, JSON.stringify(nextRecipes)]);
+    return { ok: true, player, recipeId: safeRecipeId, alreadyUnlocked: false };
+  });
+}
+
+export async function playerResearchItems(db, id) {
+  await requireCapability(await supportsResearchItems(db), "Research unlocks require dune.actors.properties with TechKnowledgePlayerComponent.");
+  const player = await resolvePlayerMutationTarget(db, id);
+  const result = await db.query(`
+    with all_research as (
+      select distinct item->>'ItemKey' as item_key
+      from dune.actors a
+      cross join lateral jsonb_array_elements(coalesce(a.properties->'TechKnowledgePlayerComponent'->'m_TechKnowledge'->'m_TechKnowledgeData', '[]'::jsonb)) item
+      where item->>'ItemKey' is not null
+    ),
+    player_research as (
+      select item->>'ItemKey' as item_key,
+             coalesce(nullif(item->>'UnlockedState', ''), 'Unknown') as unlocked_state,
+             coalesce((item->>'bIsNewEntry')::boolean, false) as is_new
+      from dune.actors a
+      cross join lateral jsonb_array_elements(coalesce(a.properties->'TechKnowledgePlayerComponent'->'m_TechKnowledge'->'m_TechKnowledgeData', '[]'::jsonb)) item
+      where a.id = $1 and item->>'ItemKey' is not null
+    )
+    select all_research.item_key,
+           coalesce(player_research.unlocked_state, 'Missing') as unlocked_state,
+           coalesce(player_research.is_new, false) as is_new
+    from all_research
+    left join player_research on player_research.item_key = all_research.item_key
+    order by all_research.item_key`, [player.actorId]);
+  return {
+    capabilities: { researchItems: true },
+    player,
+    rows: result.rows.map((row) => ({
+      itemKey: row.item_key,
+      displayName: researchDisplayName(row.item_key),
+      category: researchCategory(row.item_key),
+      productGroup: researchProductGroup(row.item_key, researchCategory(row.item_key)),
+      type: researchType(row.item_key),
+      unlockedState: row.unlocked_state || "Unknown",
+      isNew: Boolean(row.is_new),
+      unlocked: row.unlocked_state === "Purchased"
+    }))
+  };
+}
+
+export async function unlockResearchItem(db, id, { itemKey }) {
+  await requireCapability(await supportsResearchItems(db), "Research unlocks require dune.actors.properties with TechKnowledgePlayerComponent.");
+  const safeItemKey = validateResearchKey(itemKey);
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    const known = await tx.query(`
+      select exists (
+        select 1
+        from dune.actors a
+        cross join lateral jsonb_array_elements(coalesce(a.properties->'TechKnowledgePlayerComponent'->'m_TechKnowledge'->'m_TechKnowledgeData', '[]'::jsonb)) item
+        where item->>'ItemKey' = $1
+      ) as exists`, [safeItemKey]);
+    if (!known.rows[0]?.exists) throw new Error(`Research key ${safeItemKey} was not found in the game database.`);
+    const current = await tx.query(`
+      select properties->'TechKnowledgePlayerComponent'->'m_TechKnowledge'->'m_TechKnowledgeData' as items
+      from dune.actors
+      where id = $1 and properties ? 'TechKnowledgePlayerComponent'
+      for update`, [player.actorId]);
+    if (!current.rows.length) throw new UnsupportedCapabilityError(`TechKnowledgePlayerComponent not found for player ${player.actorId}.`);
+    const items = Array.isArray(current.rows[0]?.items) ? current.rows[0].items : [];
+    let alreadyUnlocked = false;
+    let found = false;
+    const nextItems = items.map((item) => {
+      if (item?.ItemKey !== safeItemKey) return item;
+      found = true;
+      alreadyUnlocked = item.UnlockedState === "Purchased";
+      return { ...item, bIsNewEntry: false, UnlockedState: "Purchased" };
+    });
+    if (!found) {
+      nextItems.push({ ItemKey: safeItemKey, bIsNewEntry: false, UnlockedState: "Purchased" });
+    }
+    await tx.query(`
+      update dune.actors
+      set properties = jsonb_set(properties, '{TechKnowledgePlayerComponent,m_TechKnowledge,m_TechKnowledgeData}', $2::jsonb, true)
+      where id = $1 and properties ? 'TechKnowledgePlayerComponent'`, [player.actorId, JSON.stringify(nextItems)]);
+    const recipeId = researchRecipeId(safeItemKey);
+    const recipeMaterialized = recipeId ? await materializeCraftingRecipeIfKnown(tx, player.actorId, recipeId) : false;
+    return { ok: true, player, itemKey: safeItemKey, alreadyUnlocked, recipeId, recipeMaterialized };
+  });
+}
+
+export async function playerJourney(db, id, journeyTagsData = {}) {
+  await requireCapability(await supportsJourney(db), "Journey data requires dune.journey_story_node, dune.player_tags, dune.tutorials, and dune.tutorial_per_player.");
+  const player = await resolvePlayerMutationTarget(db, id);
+  const tagMap = journeyTagsData?.journey_node_tags || {};
+  const contractTags = journeyTagsData?.contract_tags || {};
+  const contractAliases = journeyTagsData?.contract_aliases || {};
+  const taggedNodeIds = Object.keys(tagMap).sort((a, b) => a.localeCompare(b));
+  const knownNodeIds = taggedNodeIds.length ? taggedNodeIds : [];
+  const contractNodeIds = Object.values(contractAliases).filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  const codex = await db.query(`
+    select story_node_id
+    from dune.journey_story_node
+    where story_node_id like 'DA_Dunipedia_%'
+    group by story_node_id
+    order by story_node_id`);
+  const playerNodes = await db.query(`
+    select story_node_id,
+           complete_condition_state = 'true'::jsonb as is_complete,
+           reveal_condition_state = 'true'::jsonb as is_revealed,
+           coalesce(has_pending_reward, false) as has_pending_reward
+    from dune.journey_story_node
+    where account_id = $1`, [player.accountId]);
+  const playerTags = await db.query("select tag from dune.player_tags where account_id = $1", [player.accountId]);
+  const state = new Map(playerNodes.rows.map((row) => [row.story_node_id, {
+    complete: Boolean(row.is_complete),
+    revealed: Boolean(row.is_revealed),
+    pendingReward: Boolean(row.has_pending_reward)
+  }]));
+  const tagState = new Set(playerTags.rows.map((row) => String(row.tag || "")));
+  const tutorialRows = await db.query(`
+    select t.id,
+           t.name,
+           tp.tutorial_state
+    from dune.tutorials t
+    left join dune.tutorial_per_player tp on tp.tutorial_id = t.id and tp.player_id = $1
+    order by t.name`, [player.controllerId]);
+
+  const storyRows = knownNodeIds.filter((nodeId) => journeyGroup(nodeId) === "story").map((nodeId) => journeyNodeRow(nodeId, "Story", state, tagMap, knownNodeIds));
+  const journeyContractRows = knownNodeIds.filter((nodeId) => journeyGroup(nodeId) === "contract").map((nodeId) => journeyNodeRow(nodeId, "Contract", state, tagMap, knownNodeIds));
+  const contractRows = [
+    ...journeyContractRows,
+    ...contractNodeIds.map((nodeId) => contractNodeRow(String(nodeId), contractTags, contractAliases, tagState))
+  ].sort((a, b) => a.rawName.localeCompare(b.rawName));
+  const codexIds = codex.rows.map((row) => row.story_node_id).filter(Boolean);
+  const codexRows = codexIds.map((nodeId) => journeyNodeRow(nodeId, "Codex", state, {}, codexIds));
+  const tutorial = tutorialRows.rows.map((row) => ({
+    id: String(row.id),
+    name: journeyDisplayName(row.name),
+    rawName: String(row.name || ""),
+    category: "Tutorial",
+    depth: 0,
+    parentId: "",
+    status: tutorialStatus(row.tutorial_state),
+    complete: Number(row.tutorial_state) === 2,
+    state: row.tutorial_state === null || row.tutorial_state === undefined ? null : Number(row.tutorial_state),
+    tags: 0
+  }));
+  return { capabilities: { journey: true }, player, rows: { story: storyRows, contract: contractRows, codex: codexRows, tutorial } };
+}
+
+export async function completeJourneyNode(db, id, { nodeId }, journeyTagsData = {}) {
+  await requireCapability(await supportsJourney(db), "Journey completion requires dune.journey_story_node and dune.update_player_tags(bigint,text[],text[]).");
+  const safeNodeId = validateJourneyNodeId(nodeId);
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    if (isContractNode(safeNodeId, journeyTagsData)) {
+      const tags = contractTagsForNode(safeNodeId, journeyTagsData);
+      const tagResult = await applyJourneyTags(tx, player, tags, "add");
+      return { ok: true, player, nodeId: safeNodeId, updatedRows: 0, tagsApplied: tags.length, factionBumps: tagResult.factionBumps, contract: true };
+    }
+    const updated = await tx.query(`
+      update dune.journey_story_node
+      set complete_condition_state = 'true'::jsonb,
+          reveal_condition_state = 'true'::jsonb
+      where account_id = $1
+        and (story_node_id = $2 or story_node_id like $2 || '.%')`, [player.accountId, safeNodeId]);
+    let updatedRows = Number(updated.rowCount || 0);
+    if (updatedRows === 0) {
+      await tx.query(`
+        insert into dune.journey_story_node
+          (account_id, story_node_id, has_pending_reward, complete_condition_state, reveal_condition_state, fail_condition_state, metadata_state, reset_group)
+        values ($1, $2, false, 'true'::jsonb, 'true'::jsonb, '{}'::jsonb, '{}'::jsonb, 'Default'::dune.JourneyStoryResetGroup)`, [player.accountId, safeNodeId]);
+      updatedRows = 1;
+    }
+    const tags = tagsForJourneyNodeSubtree(safeNodeId, journeyTagsData);
+    const tagResult = await applyJourneyTags(tx, player, tags, "add");
+    return { ok: true, player, nodeId: safeNodeId, updatedRows, tagsApplied: tags.length, factionBumps: tagResult.factionBumps };
+  });
+}
+
+export async function resetJourneyNode(db, id, { nodeId }, journeyTagsData = {}) {
+  await requireCapability(await supportsJourney(db), "Journey reset requires dune.journey_story_node and dune.update_player_tags(bigint,text[],text[]).");
+  const safeNodeId = validateJourneyNodeId(nodeId);
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    if (isContractNode(safeNodeId, journeyTagsData)) {
+      const tags = contractTagsForNode(safeNodeId, journeyTagsData);
+      await applyJourneyTags(tx, player, tags, "remove");
+      return { ok: true, player, nodeId: safeNodeId, updatedRows: 0, tagsRemoved: tags.length, contract: true };
+    }
+    const updated = await tx.query(`
+      update dune.journey_story_node
+      set complete_condition_state = 'false'::jsonb,
+          has_pending_reward = false
+      where account_id = $1
+        and (story_node_id = $2 or story_node_id like $2 || '.%')`, [player.accountId, safeNodeId]);
+    const tags = tagsForJourneyNodeSubtree(safeNodeId, journeyTagsData);
+    await applyJourneyTags(tx, player, tags, "remove");
+    return { ok: true, player, nodeId: safeNodeId, updatedRows: Number(updated.rowCount || 0), tagsRemoved: tags.length };
+  });
+}
+
+export async function completeTutorial(db, id, { tutorialId }) {
+  await requireCapability(await supportsTutorials(db), "Tutorial completion requires dune.tutorials and dune.tutorial_per_player.");
+  const safeTutorialId = intParam(tutorialId, "tutorial id", 1, 32767);
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    const known = await tx.query("select exists (select 1 from dune.tutorials where id = $1) as exists", [safeTutorialId]);
+    if (!known.rows[0]?.exists) throw new Error(`Tutorial ${safeTutorialId} was not found in the game database.`);
+    await tx.query("select dune.create_or_update_tutorial_entry($1::bigint, $2::smallint, 2::smallint)", [player.controllerId, safeTutorialId]);
+    return { ok: true, player, tutorialId: safeTutorialId, state: 2 };
+  });
+}
+
+export async function resetTutorial(db, id, { tutorialId }) {
+  await requireCapability(await supportsTutorials(db), "Tutorial reset requires dune.tutorials and dune.tutorial_per_player.");
+  const safeTutorialId = intParam(tutorialId, "tutorial id", 1, 32767);
+  return db.transaction(async (tx) => {
+    const player = await resolvePlayerMutationTarget(tx, id);
+    const deleted = await tx.query("delete from dune.tutorial_per_player where player_id = $1 and tutorial_id = $2", [player.controllerId, safeTutorialId]);
+    return { ok: true, player, tutorialId: safeTutorialId, deletedRows: Number(deleted.rowCount || 0) };
+  });
+}
+
 export async function deleteInventoryItem(db, playerId, itemId) {
   await requireCapability(await supportsInventoryDelete(db), "Inventory delete requires dune.items, dune.inventories, and dune.delete_item(bigint).");
   const safeItemId = intParam(itemId, "item id", 1);
@@ -702,6 +1018,9 @@ async function playerCapabilities(db) {
     specs: await tableExists(db, "specialization_tracks"),
     addCurrency: await supportsCurrencyMutation(db),
     addFactionReputation: await supportsFactionMutation(db),
+    addIntel: await supportsIntelMutation(db),
+    craftingRecipes: await supportsCraftingRecipes(db),
+    researchItems: await supportsResearchItems(db),
     inventoryDelete: await supportsInventoryDelete(db),
     repairGear: await supportsRepairGear(db),
     refuelVehicle: await supportsRefuelVehicle(db),
@@ -710,6 +1029,321 @@ async function playerCapabilities(db) {
     stats: false,
     history: false
   };
+}
+
+async function supportsIntelMutation(db) {
+  if (!(await tableExists(db, "actors"))) return false;
+  const actorColumns = await columnsFor(db, "actors");
+  return actorColumns.has("properties");
+}
+
+async function supportsCraftingRecipes(db) {
+  if (!(await tableExists(db, "actors"))) return false;
+  const actorColumns = await columnsFor(db, "actors");
+  return actorColumns.has("properties");
+}
+
+async function supportsResearchItems(db) {
+  if (!(await tableExists(db, "actors"))) return false;
+  const actorColumns = await columnsFor(db, "actors");
+  return actorColumns.has("properties");
+}
+
+async function supportsJourney(db) {
+  return await tableExists(db, "journey_story_node") &&
+    await tableExists(db, "player_tags") &&
+    await supportsTutorials(db) &&
+    await functionExists(db, "dune.update_player_tags(bigint,text[],text[])");
+}
+
+async function supportsTutorials(db) {
+  return await tableExists(db, "tutorials") &&
+    await tableExists(db, "tutorial_per_player") &&
+    await functionExists(db, "dune.create_or_update_tutorial_entry(bigint,smallint,smallint)");
+}
+
+function validateJourneyNodeId(value) {
+  const nodeId = String(value || "").trim();
+  if (!nodeId || nodeId.length > 500 || /[\r\n]/.test(nodeId)) throw new Error("Journey node ID is invalid");
+  return nodeId;
+}
+
+function journeyGroup(nodeId) {
+  const value = String(nodeId || "");
+  if (/^DA_(CT|LDR)_/.test(value)) return "contract";
+  return "story";
+}
+
+function journeyNodeRow(nodeId, category, state, tagMap, allNodeIds) {
+  const nodeState = state.get(nodeId) || {};
+  return {
+    id: nodeId,
+    name: journeyDisplayName(nodeId),
+    rawName: nodeId,
+    category,
+    depth: journeyDepth(nodeId, allNodeIds),
+    parentId: journeyParentId(nodeId, allNodeIds),
+    status: nodeState.complete ? "Complete" : nodeState.revealed ? "Revealed" : "Incomplete",
+    complete: Boolean(nodeState.complete),
+    revealed: Boolean(nodeState.revealed),
+    pendingReward: Boolean(nodeState.pendingReward),
+    tags: Array.isArray(tagMap?.[nodeId]) ? tagMap[nodeId].length : 0,
+    dependency: journeyParentId(nodeId, allNodeIds) || ""
+  };
+}
+
+function contractNodeRow(nodeId, contractTags, contractAliases, tagState) {
+  const tags = Array.isArray(contractTags?.[nodeId]) ? contractTags[nodeId] : [];
+  const shortName = Object.entries(contractAliases || {}).find(([, full]) => full === nodeId)?.[0] || nodeId.replace(/^DA_CT_/, "");
+  const complete = tags.length > 0 && tags.every((tag) => tagState.has(String(tag)));
+  return {
+    id: nodeId,
+    name: journeyDisplayName(shortName),
+    rawName: shortName,
+    category: "Contract",
+    depth: 0,
+    parentId: "",
+    status: complete ? "Complete" : "Incomplete",
+    complete,
+    revealed: false,
+    pendingReward: false,
+    tags: tags.length,
+    dependency: ""
+  };
+}
+
+function isContractNode(nodeId, journeyTagsData = {}) {
+  const contractTags = journeyTagsData?.contract_tags || {};
+  return Array.isArray(contractTags[nodeId]);
+}
+
+function contractTagsForNode(nodeId, journeyTagsData = {}) {
+  const contractTags = journeyTagsData?.contract_tags || {};
+  const tags = contractTags[nodeId];
+  if (!Array.isArray(tags) || !tags.length) throw new Error(`Contract ${nodeId} was not found in the game data catalog.`);
+  return tags.map((tag) => String(tag || "").trim()).filter(Boolean);
+}
+
+function journeyParentId(nodeId, allNodeIds) {
+  const ids = new Set(allNodeIds);
+  const parts = String(nodeId || "").split(".");
+  while (parts.length > 1) {
+    parts.pop();
+    const parent = parts.join(".");
+    if (ids.has(parent)) return parent;
+  }
+  return "";
+}
+
+function journeyDepth(nodeId, allNodeIds) {
+  let depth = 0;
+  let parent = journeyParentId(nodeId, allNodeIds);
+  while (parent) {
+    depth += 1;
+    parent = journeyParentId(parent, allNodeIds);
+  }
+  return depth;
+}
+
+function journeyDisplayName(value) {
+  const raw = String(value || "").split(".").pop() || String(value || "");
+  return raw
+    .replace(/^(DA_|CT_|LDR_|FQ_|Dunipedia_)/, "")
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z0-9])/g, "$1 $2")
+    .replace(/([0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim() || String(value || "");
+}
+
+function tutorialStatus(value) {
+  if (Number(value) === 2) return "Complete";
+  if (Number(value) === 1) return "Started";
+  return "Not Started";
+}
+
+function tagsForJourneyNodeSubtree(nodeId, journeyTagsData = {}) {
+  const tagMap = journeyTagsData?.journey_node_tags || {};
+  const prefix = `${nodeId}.`;
+  const seen = new Set();
+  const tags = [];
+  const add = (items = []) => {
+    for (const item of items) {
+      const tag = String(item || "").trim();
+      if (tag && !seen.has(tag)) {
+        seen.add(tag);
+        tags.push(tag);
+      }
+    }
+  };
+  add(tagMap[nodeId]);
+  for (const [id, items] of Object.entries(tagMap)) {
+    if (String(id).startsWith(prefix)) add(items);
+  }
+  return tags;
+}
+
+const FACTION_TIER_THRESHOLDS = [0, 99, 249, 499, 999, 1999, 2224, 2524, 2899, 3349, 3874, 4474, 5149, 5899, 6724, 7624, 8599, 9649, 10774, 11974, 12474];
+
+function factionTierBumps(tags) {
+  const out = new Map();
+  for (const tag of tags) {
+    const match = /^Faction\.([A-Za-z]+)\.Tier([0-5])$/.exec(String(tag || ""));
+    if (!match) continue;
+    const tier = Number(match[2]);
+    const rep = tier > 0 ? FACTION_TIER_THRESHOLDS[tier] + 1 : 0;
+    const current = out.get(match[1]) || 0;
+    if (rep > current) out.set(match[1], rep);
+  }
+  return out;
+}
+
+function factionIdByName(name) {
+  if (name === "Atreides") return 1;
+  if (name === "Harkonnen") return 2;
+  if (name === "None") return 3;
+  if (name === "Smuggler") return 4;
+  return 0;
+}
+
+async function applyJourneyTags(db, player, tags, mode) {
+  if (!tags.length) return { factionBumps: 0 };
+  if (mode === "remove") {
+    await db.query("select dune.update_player_tags($1, '{}'::text[], $2::text[])", [player.accountId, tags]);
+    return { factionBumps: 0 };
+  }
+  await db.query("select dune.update_player_tags($1, $2::text[], '{}'::text[])", [player.accountId, tags]);
+  const bumps = factionTierBumps(tags);
+  let factionBumps = 0;
+  for (const [name, rep] of bumps.entries()) {
+    const factionId = factionIdByName(name);
+    if (!factionId) continue;
+    const current = await db.query(`
+      select coalesce(reputation_amount, 0) as reputation_amount
+      from dune.player_faction_reputation
+      where actor_id = $1 and faction_id = $2`, [player.controllerId, factionId]);
+    if (Number(current.rows[0]?.reputation_amount || 0) >= rep) continue;
+    await db.query("select dune.set_player_faction_reputation($1::bigint, $2::smallint, $3::integer)", [player.controllerId, factionId, rep]);
+    factionBumps += 1;
+  }
+  if (factionBumps > 0) await syncFactionComponent(db, player.controllerId);
+  return { factionBumps };
+}
+
+function validateRecipeId(value) {
+  const recipeId = String(value || "").trim();
+  if (!/^[A-Za-z0-9_().-]+$/.test(recipeId)) throw new Error("Crafting recipe ID is invalid");
+  return recipeId;
+}
+
+function recipeDisplayName(recipeId) {
+  return String(recipeId || "")
+    .replace(/_?recipe$/i, "")
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z0-9])/g, "$1 $2")
+    .replace(/([0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim() || recipeId;
+}
+
+function recipeCategory(recipeId) {
+  const value = String(recipeId || "").toLowerCase();
+  if (/(buggy|sandbike|vehicle|treadwheel|ornithopter|sandcrawler)/.test(value)) return "Vehicles";
+  if (/(stillsuit|literjon|bloodsack|blood_sack|bodyfluid|dew|water|stilltent)/.test(value)) return "Water Discipline";
+  if (/(ammo|rifle|pistol|shotgun|smg|weapon|lasgun|flamethrower|staticcompactor|kindjal|crysknife|knife|sword|shield|napalm|disruptor)/.test(value)) return "Combat";
+  if (/(building|basebackup|portablelight|decajon|totem|refinery|container|fabricator|placeable|structure)/.test(value)) return "Construction";
+  if (/(scanner|powerpack|radiation|cutteray|miningtool|mining_tool|thumper|suspensor|fuel|harvester)/.test(value)) return "Exploration";
+  return "Essentials";
+}
+
+function validateResearchKey(value) {
+  const itemKey = String(value || "").trim();
+  if (!/^[A-Za-z0-9_().+\-]+$/.test(itemKey)) throw new Error("Research key is invalid");
+  return itemKey;
+}
+
+function researchRecipeId(itemKey) {
+  const value = String(itemKey || "");
+  return value.startsWith("RCP_") ? value.slice(4) : "";
+}
+
+async function materializeCraftingRecipeIfKnown(db, actorId, recipeId) {
+  if (!recipeId) return false;
+  const known = await db.query(`
+    select exists (
+      select 1
+      from dune.actors a
+      cross join lateral jsonb_array_elements(coalesce(a.properties->'CraftingRecipesLibraryActorComponent'->'m_KnownItemRecipes', '[]'::jsonb)) recipe
+      where recipe->'BaseRecipeId'->>'Name' = $1
+    ) as exists`, [recipeId]);
+  if (!known.rows[0]?.exists) return false;
+  const current = await db.query(`
+    select properties->'CraftingRecipesLibraryActorComponent'->'m_KnownItemRecipes' as recipes
+    from dune.actors
+    where id = $1 and properties ? 'CraftingRecipesLibraryActorComponent'
+    for update`, [actorId]);
+  if (!current.rows.length) return false;
+  const recipes = Array.isArray(current.rows[0]?.recipes) ? current.rows[0].recipes : [];
+  if (recipes.some((recipe) => recipe?.BaseRecipeId?.Name === recipeId)) return false;
+  const nextRecipes = [...recipes, {
+    m_Source: "SchematicPickup",
+    m_bIsNew: true,
+    BaseRecipeId: { Name: recipeId },
+    m_QualityLevel: 0,
+    m_NumberOfRecipeUses: 0,
+    m_bIsLimitedUseRecipe: false
+  }];
+  await db.query(`
+    update dune.actors
+    set properties = jsonb_set(properties, '{CraftingRecipesLibraryActorComponent,m_KnownItemRecipes}', $2::jsonb, true)
+    where id = $1 and properties ? 'CraftingRecipesLibraryActorComponent'`, [actorId, JSON.stringify(nextRecipes)]);
+  return true;
+}
+
+function researchDisplayName(itemKey) {
+  return String(itemKey || "")
+    .replace(/^(RCP_|DA_GRP_|BLD_)/, "")
+    .replace(/_?Patent$/i, "")
+    .replace(/_?Recipe$/i, "")
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z0-9])/g, "$1 $2")
+    .replace(/([0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim() || itemKey;
+}
+
+function researchType(itemKey) {
+  const value = String(itemKey || "");
+  if (value.startsWith("RCP_")) return "Recipe";
+  if (value.startsWith("BLD_")) return "Building";
+  if (value.startsWith("DA_GRP_")) return "Group";
+  return "Research";
+}
+
+function researchCategory(itemKey) {
+  const value = String(itemKey || "").toLowerCase();
+  if (/(unique|recyclerdummy)/.test(value)) return "Uniques";
+  if (/(vehicle|sandbike|buggy|orni|ornithopter|thopter|repairtool|welding|fuel)/.test(value)) return "Vehicles";
+  if (/(stillsuit|literjon|blood|dew|water|windtrap|cistern|exsanguination|stilltent)/.test(value)) return "Water Discipline";
+  if (/(armor|ammo|rifle|pistol|shotgun|smg|lmg|weapon|lasgun|compactor|kindjal|crysknife|knife|sword|shield|napalm|dirk|rapier|rocket)/.test(value)) return "Combat";
+  if (/(bld_|building|shelter|totem|generator|lighting|silo|fabricator|refinery|container|staking|pentashield|turbine|spice)/.test(value)) return "Construction";
+  if (/(scanner|binocular|powerpack|radiation|cutteray|mining|thumper|suspensor|probe|spice|stabilization)/.test(value)) return "Exploration";
+  if (/(augment)/.test(value)) return "Augmentations";
+  return "Essentials";
+}
+
+function researchProductGroup(itemKey, category = "") {
+  const value = String(itemKey || "").toLowerCase();
+  if (/(t6|plastanium|regis)/.test(value)) return "Plastanium Products";
+  if (/(t5|duraluminum|duraluminium)/.test(value)) return "Duraluminum Products";
+  if (/(t4|aluminum|aluminium)/.test(value)) return "Aluminum Products";
+  if (/(t3|steel)/.test(value)) return "Steel Products";
+  if (/(t2|iron)/.test(value)) return "Iron Products";
+  if (/(copper)/.test(value)) return "Copper Products";
+  if (/(augment)/.test(value)) return "Generic Augmentations";
+  if (category === "Uniques") return "Copper Products";
+  if (category === "Vehicles") return "Copper Products";
+  return "Salvage Products";
 }
 
 async function supportsCurrencyMutation(db) {
