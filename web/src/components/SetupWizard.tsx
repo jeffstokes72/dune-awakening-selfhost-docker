@@ -7,17 +7,30 @@ import { TaskProgress } from "./TaskProgress";
 const steps = ["Welcome", "Host Check", "Docker Setup", "Runtime Location", "Server Identity", "Funcom Token", "Ports", "Review", "Install", "Finish"];
 const regions = ["Europe", "North America", "South America", "Asia", "Oceania", "Africa"];
 type SetupConfig = { SERVER_TITLE: string; SERVER_REGION: string; SERVER_IP: string; SERVER_IP_MODE: string; SERVER_PROVIDER: string; STEAM_APP_ID: string };
+const terminalStatuses = new Set(["succeeded", "failed", "cancelled"]);
 
-export function SetupWizard({ initialStep = 0, jumpNonce = 0 }: { initialStep?: number; jumpNonce?: number }) {
+export function SetupWizard({ initialStep = 0, jumpNonce = 0, onSetupComplete }: { initialStep?: number; jumpNonce?: number; onSetupComplete?: () => void }) {
   const [step, setStep] = useState(initialStep);
+  const [maxUnlockedStep, setMaxUnlockedStep] = useState(initialStep);
   const [checks, setChecks] = useState<Check[]>([]);
   const [task, setTask] = useState<Task | null>(null);
   const [token, setToken] = useState("");
+  const [existingToken, setExistingToken] = useState(false);
   const [config, setConfig] = useState<SetupConfig>({ SERVER_TITLE: "My Dune Server", SERVER_REGION: "Europe", SERVER_IP: "auto", SERVER_IP_MODE: "public", SERVER_PROVIDER: "dune-docker", STEAM_APP_ID: "4754530" });
 
   useEffect(() => {
-    setStep(Math.max(0, Math.min(initialStep, steps.length - 1)));
+    const next = Math.max(0, Math.min(initialStep, steps.length - 1));
+    setStep(next);
+    setMaxUnlockedStep((current) => Math.max(current, next));
   }, [initialStep, jumpNonce]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setupApi.state().then((state) => {
+      if (!cancelled) setExistingToken(Boolean(state.files?.token));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   async function runPreflight() {
     const result = await setupApi.preflight();
@@ -33,12 +46,49 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0 }: { initialStep?: 
     await saveConfig();
     const result = await setupApi.init();
     setTask(result.task);
+    void watchInitTask(result.task.id);
+  }
+
+  async function watchInitTask(taskId: string) {
+    let current = (await setupApi.task(taskId)).task;
+    setTask(current);
+    while (!["succeeded", "failed", "cancelled"].includes(current.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      current = (await setupApi.task(current.id)).task;
+      setTask(current);
+    }
+    if (current.status === "succeeded") onSetupComplete?.();
+  }
+
+  const hasToken = Boolean(token.trim() || existingToken);
+  const configReady = Boolean(config.SERVER_TITLE.trim() && config.SERVER_REGION && config.SERVER_IP.trim() && config.SERVER_IP_MODE && config.SERVER_PROVIDER.trim() && config.STEAM_APP_ID.trim());
+  const checksReady = checks.length > 0 && checks.every((check) => check.status !== "fail");
+  const deploymentSucceeded = task?.status === "succeeded";
+  const deploymentRunning = Boolean(task && !terminalStatuses.has(task.status));
+  const stepReady = [
+    true,
+    checksReady,
+    true,
+    true,
+    configReady,
+    hasToken,
+    true,
+    configReady && hasToken,
+    deploymentSucceeded,
+    true
+  ];
+
+  function nextStep() {
+    if (!stepReady[step] || step >= steps.length - 1) return;
+    const next = step + 1;
+    setMaxUnlockedStep((current) => Math.max(current, next));
+    setStep(next);
   }
 
   return (
     <section className="wizard">
       <div className="stepper">
-        {steps.map((label, index) => <button key={label} className={index === step ? "active" : ""} onClick={() => setStep(index)}>{index + 1}. {label}</button>)}
+        {steps.map((label, index) => <button key={label} className={index === step ? "active" : ""} disabled={index > maxUnlockedStep} onClick={() => setStep(index)}>{index + 1}. {label}</button>)}
       </div>
       <div className="panel">
         {step === 0 && <>
@@ -52,13 +102,14 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0 }: { initialStep?: 
         </>}
         {step === 1 && <>
           <h2>Host Check</h2>
-          <p className="muted">If this server is already running, some ports may show as in use by the current stack. Treat that as normal unless the check names an unrelated process.</p>
+          <p className="muted">Run a quick check before setup starts. Some items are expected to be created later by the wizard, so they will be shown as setup items instead of problems.</p>
           <button onClick={runPreflight}>Run Checks</button>
+          {checks.length > 0 && !checksReady && <p className="danger-note">Fix the failed checks before continuing.</p>}
           <div className="check-grid">{checks.map((check) => <PreflightCheckCard key={check.name} check={check} />)}</div>
         </>}
         {step === 2 && <>
           <h2>Docker Setup</h2>
-          <p>The console checks Docker for you. If Docker, Compose, or the Docker service is missing, stopped, or unavailable, the installer handles the Linux repair before the Web UI opens. If you are using Docker Desktop or a VM, the wizard tells you what needs attention.</p>
+          <p>The installer checks the server for you. If Docker or Compose is missing on a supported Linux server, it installs what is needed before the Web UI opens.</p>
         </>}
         {step === 3 && <>
           <h2>Runtime Location</h2>
@@ -77,8 +128,10 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0 }: { initialStep?: 
         </>}
         {step === 5 && <>
           <h2>Funcom Token</h2>
-          <p>The token is stored at <code>runtime/secrets/funcom-token.txt</code> with restrictive permissions and redacted from logs.</p>
+          <p>Paste your Funcom self-host token here. When you continue, the console saves it securely on this server and keeps it out of logs.</p>
+          {existingToken && !token && <p className="muted">An existing token is already saved. Paste a new one only if you want to replace it.</p>}
           <SecretInput value={token} onChange={(event) => setToken(event.target.value)} placeholder="Paste token" />
+          {!hasToken && <p className="danger-note">A Funcom self-host token is required before deployment.</p>}
         </>}
         {step === 6 && <>
           <h2>Ports and Firewall</h2>
@@ -109,7 +162,6 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0 }: { initialStep?: 
               <p>Keep the web admin, Postgres, Director, TextRouter, RabbitMQ admin, RabbitMQ HTTP, and other internal service ports private.</p>
             </section>
           </div>
-          <p className="danger-note">Only forward internal ports if you are intentionally building an advanced multi-host setup and know why they are needed.</p>
         </>}
         {step === 7 && <>
           <h2>Review</h2>
@@ -158,17 +210,19 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0 }: { initialStep?: 
           <p className="danger-note">Initial setup can initialize or reset local world state. Review before continuing.</p>
         </>}
         {step === 8 && <>
-          <h2>Install / Initialize / Start</h2>
-          <button onClick={init}>Run Existing Dune Init</button>
+          <h2>Deploy Server</h2>
+          <p>This starts the Dune Docker deployment. The console will prepare local settings, download required server assets, update the database, and start the game services.</p>
+          <button disabled={deploymentRunning || deploymentSucceeded} onClick={init}>{deploymentSucceeded ? "Deployment Complete" : deploymentRunning ? "Deploying..." : "Start Deployment"}</button>
           <TaskProgress task={task} />
+          {deploymentSucceeded && <p className="success-note">Deployment finished. Continue to the final step while the game services warm up.</p>}
         </>}
         {step === 9 && <>
           <h2>Finish</h2>
-          <p>Open the dashboard, check readiness, view logs, create a backup, or manage players.</p>
+          <p>The server stack has started. Game services can take several minutes to warm up, and the in-game browser can take a little longer to show the server. Open the dashboard to watch readiness, review logs, and create your first backup.</p>
         </>}
         <div className="wizard-controls">
           <button disabled={step === 0} onClick={() => setStep(step - 1)}>Back</button>
-          <button disabled={step === steps.length - 1} onClick={() => setStep(step + 1)}>Next</button>
+          <button disabled={step === steps.length - 1 || !stepReady[step]} onClick={nextStep}>Next</button>
         </div>
       </div>
     </section>

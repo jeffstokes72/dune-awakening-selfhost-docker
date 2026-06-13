@@ -56,6 +56,11 @@ function formatUiSentence(value: unknown, pending = false) {
 }
 
 function taskTitle(task: Task) {
+  if (task.operation === "init") {
+    if (task.status === "succeeded") return "Deployment Complete";
+    if (task.status === "failed") return "Deployment Failed";
+    return "Deploying Dune Server";
+  }
   if (task.operation === "backupRestore") {
     if (task.status === "succeeded") return "Restore Completed";
     if (task.status === "failed") return "Backup Restore Failed";
@@ -65,6 +70,7 @@ function taskTitle(task: Task) {
 }
 
 function taskMessage(task: Task) {
+  if (task.operation === "init") return initTaskMessage(task);
   if (task.operation !== "backupRestore") return task.progressMessage || task.currentStep;
   if (task.status === "succeeded") return "Database restore finished and the Dune stack restart completed.";
   if (task.status === "failed") return task.errorMessage || "Database restore failed.";
@@ -79,4 +85,20 @@ function taskMessage(task: Task) {
   if (/Stopping services that depend on the database/i.test(lines)) return "Stopping Dune services before the database restore.";
   if (/Creating database backup/i.test(lines)) return "Creating a pre-restore safety backup.";
   return task.progressMessage || "Preparing database restore.";
+}
+
+function initTaskMessage(task: Task) {
+  if (task.status === "succeeded") return "Deployment finished. The game services are starting and may need several minutes before they are ready.";
+  if (task.status === "failed") return task.errorMessage || "Deployment failed. Open technical details to see the last server output.";
+  const lines = task.logLines.map((row) => row.line).join("\n");
+  if (/Starting orchestrator container/i.test(lines)) return "Starting the deployment container.";
+  if (/Downloading\/loading assets and running database setup\/update/i.test(lines)) return "Downloading server assets, loading Funcom images, and preparing the database.";
+  if (/Starting Dune stack/i.test(lines)) return "Starting Dune services.";
+  if (/Wrote local config/i.test(lines)) return "Saving server settings and token.";
+  if (/Preparing fresh runtime state|Backing up existing local config/i.test(lines)) return "Preparing local runtime files.";
+  if (/Resetting Postgres volume/i.test(lines)) return "Preparing the database volume.";
+  if (/Unable to find image|Pulling|Downloaded newer image|Status: Downloaded/i.test(lines)) return "Downloading required Docker images.";
+  if (/SteamCMD|download|app_update|Loading server assets/i.test(lines)) return "Downloading or updating Dune server files.";
+  if (/run DB setup|database setup|Applying|world partitions/i.test(lines)) return "Preparing Dune database and world data.";
+  return "Preparing deployment.";
 }

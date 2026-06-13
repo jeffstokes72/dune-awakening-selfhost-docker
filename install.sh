@@ -8,6 +8,7 @@ WEB_COMPOSE="docker-compose.web.yml"
 WEB_SERVICE="redblink-dune-docker-console"
 WEB_PORT="${ADMIN_BIND_PORT:-8088}"
 DOCKER=(docker)
+DOCKER_GROUP_UPDATED=0
 
 say() {
   printf '\n%s\n' "$1"
@@ -117,6 +118,24 @@ start_docker() {
   exit 1
 }
 
+ensure_docker_group_access() {
+  local target_user
+  target_user="${SUDO_USER:-${USER:-}}"
+  if [ -z "$target_user" ] || [ "$target_user" = "root" ]; then
+    return
+  fi
+  if ! getent group docker >/dev/null 2>&1; then
+    return
+  fi
+  if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    return
+  fi
+
+  step "Allowing your user to run Docker commands later."
+  need_sudo usermod -aG docker "$target_user" || true
+  DOCKER_GROUP_UPDATED=1
+}
+
 ensure_compose() {
   if "${DOCKER[@]}" compose version >/dev/null 2>&1; then
     return
@@ -146,13 +165,24 @@ ensure_compose() {
 
 host_ip() {
   local ip=""
-  if command -v hostname >/dev/null 2>&1; then
-    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | head -n1 || true)"
-  fi
-  if [ -z "$ip" ] && command -v ip >/dev/null 2>&1; then
+  if command -v ip >/dev/null 2>&1; then
     ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i=1; i<=NF; i++) if ($i == "src") { print $(i + 1); exit } }' || true)"
   fi
+  if [ -z "$ip" ] && command -v hostname >/dev/null 2>&1; then
+    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -Ev '^(127\.|169\.254\.|172\.17\.|172\.18\.|172\.19\.|172\.2[0-9]\.|172\.3[0-1]\.)' | head -n1 || true)"
+  fi
   printf '%s' "${ip:-127.0.0.1}"
+}
+
+public_ip() {
+  local ip=""
+  if command -v curl >/dev/null 2>&1; then
+    ip="$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null | tr -d '[:space:]' || true)"
+    if printf '%s' "$ip" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      printf '%s' "$ip"
+      return
+    fi
+  fi
 }
 
 start_console() {
@@ -166,19 +196,53 @@ start_console() {
   "${DOCKER[@]}" compose -f "$WEB_COMPOSE" up -d --build "$WEB_SERVICE"
 }
 
+read_admin_password() {
+  local password_file="$1"
+  local attempt
+  for attempt in $(seq 1 20); do
+    if [ -s "$password_file" ]; then
+      tr -d '\r\n' < "$password_file"
+      return
+    fi
+    if command -v sudo >/dev/null 2>&1 && sudo test -s "$password_file" 2>/dev/null; then
+      sudo cat "$password_file" | tr -d '\r\n'
+      return
+    fi
+    sleep 1
+  done
+}
+
 show_finish() {
-  local ip password_file
+  local ip public password_file admin_password
   ip="$(host_ip)"
+  public="$(public_ip)"
   password_file="$(pwd)/runtime/secrets/admin-web-password.txt"
+  admin_password="$(read_admin_password "$password_file")"
 
   say "$APP_NAME is ready."
   echo
-  echo "Open this address in your browser:"
-  echo "  http://$ip:$WEB_PORT"
+  echo "Open the Web UI in your browser:"
+  if [ -n "$public" ] && [ "$public" != "$ip" ]; then
+    echo "  Remote / public access: http://$public:$WEB_PORT"
+    echo "  Same network access:    http://$ip:$WEB_PORT"
+  else
+    echo "  http://$ip:$WEB_PORT"
+  fi
+  echo
+  echo "If you are on the same local network as this server, use the same-network address."
+  echo "If you are connecting over the internet, use the public address and make sure TCP $WEB_PORT is allowed by the server firewall or VPS firewall."
+  if [ "$DOCKER_GROUP_UPDATED" = "1" ]; then
+    echo
+    echo "Your user was added to the docker group. After you sign out and back in, Docker commands will work without sudo."
+  fi
   echo
   echo "Your first admin password was generated automatically."
-  echo "This server shows you where to find it:"
-  echo "  $password_file"
+  if [ -n "$admin_password" ]; then
+    echo "Use this password to sign in:"
+    echo "  $admin_password"
+  else
+    echo "The password was not ready yet. Wait a few seconds and run ./install.sh again to show it."
+  fi
   echo
   echo "After signing in, the setup wizard will check the server and finish everything from the browser."
 }
@@ -193,6 +257,7 @@ fi
 
 install_docker
 start_docker
+ensure_docker_group_access
 ensure_compose
 start_console
 show_finish

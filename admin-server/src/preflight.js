@@ -99,7 +99,7 @@ function dockerDaemonCheck() {
 
 function fileCheck(name, path, optional = false) {
   if (existsSync(path)) return check(name, "pass", path);
-  return check(name, optional ? "warn" : "fail", `Missing: ${path}`);
+  return check(optional ? `${name} (setup will create this)` : name, optional ? "info" : "fail", optional ? "Not created yet" : `Missing: ${path}`, optional ? path : "");
 }
 
 function diskCheck(path) {

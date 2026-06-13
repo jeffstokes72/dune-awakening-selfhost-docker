@@ -94,6 +94,10 @@ function loadJourneyTagsData() {
 }
 
 async function maybeAutoStartStackOnBoot() {
+  if (!isSetupComplete()) {
+    console.log("Boot auto-start skipped because first-time setup is not complete.");
+    return;
+  }
   const mainContainers = [
     "dune-postgres",
     "dune-rmq-admin",
@@ -124,6 +128,12 @@ async function maybeAutoStartStackOnBoot() {
     else if (code === 2) console.log("Boot auto-start skipped because manual stop is active for this Linux boot.");
     else console.error(`Boot auto-start exited with code ${code}.`);
   });
+}
+
+function isSetupComplete() {
+  return existsSync(resolve(config.repoRoot, ".env"))
+    && existsSync(resolve(config.secretsDir, "funcom-token.txt"))
+    && existsSync(resolve(config.generatedDir, "battlegroup.env"));
 }
 
 function dockerPsNames() {

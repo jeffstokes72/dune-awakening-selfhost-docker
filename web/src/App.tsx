@@ -24,6 +24,7 @@ import { ReadinessTimeline } from "./components/ReadinessTimeline";
 import { SecretInput } from "./components/SecretInput";
 
 type Tab = "Home" | "Setup" | "Server Control" | "Services" | "Players" | "Admin Tools" | "Live Map" | "Maps" | "Care Package" | "Addons" | "Database" | "Storage" | "Backups" | "Logs" | "Updates" | "Settings";
+type SetupState = { files: Record<string, boolean>; config: Record<string, unknown> };
 type HomeLoadResult = { statusLoaded: boolean; readinessLoaded: boolean; statusError: string; readinessError: string; statusText: string; readinessText: string };
 type CatalogItem = { name: string; id: string; itemId?: string; category?: string; source?: string; image?: string };
 type CraftingRecipeRow = { recipeId: string; displayName: string; category: string; source: string; qualityLevel: number; unlocked: boolean };
@@ -245,9 +246,13 @@ export function App() {
   const [stackVersionStatus, setStackVersionStatus] = useState<Record<string, string>>({ status: "Checking", current: "", latest: "" });
   const stackActionStartedAt = useRef(0);
   const stackStatusLoadRef = useRef<Promise<HomeLoadResult> | null>(null);
+  const [setupState, setSetupState] = useState<SetupState | null>(null);
+  const [setupStateLoaded, setSetupStateLoaded] = useState(false);
   const [setupJump, setSetupJump] = useState({ step: 0, nonce: 0 });
   const [error, setError] = useState("");
   const [confirmRequest, setConfirmRequest] = useState<ConfirmDialogRequest | null>(null);
+  const setupComplete = Boolean(setupState?.files?.env && setupState?.files?.token && setupState?.files?.battlegroup);
+  const firstRunSetup = auth && setupStateLoaded && !setupComplete;
 
   useEffect(() => {
     api<{ authenticated: boolean; csrfToken: string | null }>("/api/auth/state").then((state) => {
@@ -259,6 +264,28 @@ export function App() {
   useEffect(() => {
     persistFuncomTokenResult(funcomTokenResult);
   }, [funcomTokenResult]);
+
+  useEffect(() => {
+    if (!auth) {
+      setSetupState(null);
+      setSetupStateLoaded(false);
+      return;
+    }
+    let cancelled = false;
+    setSetupStateLoaded(false);
+    setupApi.state().then((state) => {
+      if (cancelled) return;
+      setSetupState(state);
+      setSetupStateLoaded(true);
+      if (!(state.files?.env && state.files?.token && state.files?.battlegroup)) setTab("Setup");
+    }).catch((err) => {
+      if (cancelled) return;
+      setError(err instanceof Error ? err.message : String(err));
+      setSetupStateLoaded(true);
+      setTab("Setup");
+    });
+    return () => { cancelled = true; };
+  }, [auth]);
 
   useEffect(() => {
     openConfirmDialog = (request) => setConfirmRequest(request);
@@ -355,7 +382,7 @@ export function App() {
   }, [homeRunningAction, loadStackStatus]);
 
   useEffect(() => {
-    if (!auth) return;
+    if (!auth || !setupComplete) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -366,19 +393,55 @@ export function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [auth]);
+  }, [auth, setupComplete]);
 
   if (!auth) {
     return (
       <main className="login-screen">
         <section className="login-panel">
           <h1>Dune Docker Console</h1>
-          <p>Sign in with the local admin password from <code>runtime/secrets/admin-web-password.txt</code></p>
+          <p>Enter your admin password.</p>
           <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Admin Password" />
           <button onClick={() => safe(login)}>Sign In</button>
           {error && <p className="error">{error}</p>}
         </section>
       </main>
+    );
+  }
+
+  if (!setupStateLoaded) {
+    return (
+      <main className="login-screen">
+        <section className="login-panel">
+          <h1>Dune Docker Console</h1>
+          <p className="loading-dots">Loading setup</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (firstRunSetup) {
+    return (
+      <div className="app-shell setup-only-shell">
+        <main>
+          <header className="topbar">
+            <div>
+              <strong>Setup</strong>
+              <span>Finish the first-time setup to unlock the console.</span>
+            </div>
+          </header>
+          {error && <div className="error-banner">{error}</div>}
+          <SetupWizard
+            initialStep={setupJump.step}
+            jumpNonce={setupJump.nonce}
+            onSetupComplete={async () => {
+              const state = await setupApi.state();
+              setSetupState(state);
+              if (state.files?.env && state.files?.token && state.files?.battlegroup) setTab("Home");
+            }}
+          />
+        </main>
+      </div>
     );
   }
 
@@ -427,7 +490,7 @@ export function App() {
         </header>
         {error && <div className="error-banner">{error}</div>}
         {tab === "Home" && <HomePanel status={status} readiness={readiness} taskResult={homeTaskResult} setTaskResult={setHomeTaskResult} funcomTokenResult={funcomTokenResult} setFuncomTokenResult={setFuncomTokenResult} runningAction={homeRunningAction} setRunningAction={setHomeRunningAction} onLoad={loadStackStatus} />}
-        {tab === "Setup" && <SetupWizard initialStep={setupJump.step} jumpNonce={setupJump.nonce} />}
+        {tab === "Setup" && <SetupWizard initialStep={setupJump.step} jumpNonce={setupJump.nonce} onSetupComplete={async () => setSetupState(await setupApi.state())} />}
         {tab === "Server Control" && <ServerPanel setTask={setTask} setStatus={setStatus} status={status} setReadiness={setReadiness} setPorts={setPorts} setDoctor={setDoctor} ports={ports} readiness={readiness} doctor={doctor} taskResult={homeTaskResult} setTaskResult={setHomeTaskResult} funcomTokenResult={funcomTokenResult} setFuncomTokenResult={setFuncomTokenResult} runningAction={homeRunningAction} setRunningAction={setHomeRunningAction} onError={setError} onRedeploy={() => {
           setSetupJump((current) => ({ step: 4, nonce: current.nonce + 1 }));
           setTab("Setup");
