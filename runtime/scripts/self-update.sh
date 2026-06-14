@@ -345,6 +345,7 @@ backup_current_stack() {
     --exclude='./runtime/secrets' \
     --exclude='./runtime/backups' \
     --exclude='./runtime/game' \
+    --exclude='./runtime/text-router' \
     --exclude='./work' \
     .
 

@@ -44,6 +44,7 @@ auto_repair_stack_git_state() {
     --exclude='./runtime/secrets' \
     --exclude='./runtime/backups' \
     --exclude='./runtime/game' \
+    --exclude='./runtime/text-router' \
     --exclude='./work' \
     . 2>/dev/null || true
   echo "Current stack files backup:"
