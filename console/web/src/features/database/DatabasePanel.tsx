@@ -106,6 +106,7 @@ export function DatabasePanel() {
   const [databasePassword, setDatabasePassword] = useState("");
   const [databasePasswordConfirm, setDatabasePasswordConfirm] = useState("");
   const [databasePasswordState, setDatabasePasswordState] = useState<DatabasePasswordState>(() => loadDatabasePasswordState());
+  const [tableSearch, setTableSearch] = useState("");
   const [search, setSearch] = useState("");
   const [searchRows, setSearchRows] = useState<Record<string, unknown>[]>([]);
   const [searchRan, setSearchRan] = useState(false);
@@ -284,6 +285,10 @@ export function DatabasePanel() {
   const queryColumns = queryResult?.columns?.map((column) => column.name).filter((name) => name !== "__rowid");
   const queryRows = (queryResult?.rows || []).map((row) => omitInternalRowFields(row));
   const queryAffectedRows = Number(queryResult?.rowCount ?? queryRows.length);
+  const tableSearchTerm = tableSearch.trim().toLowerCase();
+  const filteredTables = tableSearchTerm
+    ? tables.filter((table) => `${String(table.schema || "")}.${String(table.name || "")}`.toLowerCase().includes(tableSearchTerm))
+    : tables;
   return <section className="panel">
     <h2>Database Browser</h2>
     <p className="database-browser-note">
@@ -316,7 +321,13 @@ export function DatabasePanel() {
       {!databaseStatusError && Boolean(databaseServer?.version) && <TechnicalDetails title="Postgres version" text={String(databaseServer?.version)} />}
     </section>}
     <h3>Tables</h3>
-    <DataTable rows={tables} columns={["schema", "name", "row_count"]} onRowClick={(row) => open(String(row.name))} />
+    <div className="action-row database-table-search-row">
+      <input value={tableSearch} onChange={(event) => setTableSearch(event.target.value)} placeholder="Search table names" />
+      {tableSearch && <button onClick={() => setTableSearch("")}>Clear</button>}
+    </div>
+    {filteredTables.length
+      ? <DataTable rows={filteredTables} columns={["schema", "name", "row_count"]} onRowClick={(row) => open(String(row.name))} />
+      : <div className="empty database-empty">No matching tables found.</div>}
     <h3 ref={previewRef}>{selected ? `${schema}.${selected} (${count} rows)` : "Table Preview"}</h3>
     {!selected && <div className="empty database-empty">No table selected. Select a table to preview and edit rows.</div>}
     {selected && <section className="database-table-panel">
@@ -350,7 +361,7 @@ export function DatabasePanel() {
         </span>}
       </section>}
     </section>}
-    <h3>Search Columns</h3>
+    <h3>Search Tables and Columns</h3>
     <div className="action-row"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tables or columns" /><button onClick={searchColumns}>Search</button></div>
     {searchRan && (searchRows.length ? <DataTable rows={searchRows} /> : <div className="empty database-empty">No matching tables or columns found.</div>)}
     <div className={`playerAdmin_toggle database-advanced-section ${advancedSqlOpen ? "open" : ""}`}>
