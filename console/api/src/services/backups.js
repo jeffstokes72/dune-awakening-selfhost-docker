@@ -1,0 +1,123 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { gzipSync } from "node:zlib";
+
+export function enrichBackupRows(config, rows) {
+  return rows.map((row) => {
+    const metadata = readBackupMetadata(config, row.name);
+    const origin = String(metadata.backup_origin || metadata.origin || "").trim().toLowerCase();
+    const battlegroupId = String(metadata.imported_from_battlegroup_id || metadata.battlegroup_id || "").trim();
+    const enriched = { ...row, battlegroupId: battlegroupId || "Unknown" };
+    if (/^(automatic|scheduled)$/.test(origin)) return { ...enriched, type: "Automatic Backup" };
+    if (/^(restore-safety|restore_safety|restore safety)$/.test(origin)) return { ...enriched, type: "Restore Safety Backup" };
+    if (/^(pre-update|pre_update|preupdate)$/.test(origin)) return { ...enriched, type: "Pre-update Backup" };
+    if (/^(destructive-sql|destructive_sql|destructive sql|sql-safety|sql_safety)$/.test(origin)) return { ...enriched, type: "SQL Safety Backup" };
+    if (/^(external|imported)$/.test(origin)) return { ...enriched, type: "Imported Backup", source: "External" };
+    return enriched;
+  });
+}
+
+export function readBackupMetadata(config, name) {
+  if (!/^[A-Za-z0-9_.-]+\.(backup|dump|sql)$/i.test(String(name || ""))) return {};
+  const metadataPath = resolve(config.repoRoot, "runtime/backups/db", `${name}.yaml`);
+  if (!existsSync(metadataPath)) return {};
+  try {
+    return parseBackupMetadata(readFileSync(metadataPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+export function normalizeImportedBackupMetadata(config, content) {
+  const metadata = parseBackupMetadata(content);
+  const currentBattlegroupId = readCurrentBattlegroupId(config);
+  const originalBattlegroupId = String(metadata.battlegroup_id || "").trim();
+  if (originalBattlegroupId && currentBattlegroupId && originalBattlegroupId !== currentBattlegroupId && !metadata.imported_from_battlegroup_id) {
+    metadata.imported_from_battlegroup_id = originalBattlegroupId;
+  }
+  metadata.backup_origin = "external";
+  metadata.imported_at = new Date().toISOString();
+  return stringifyBackupMetadata(metadata);
+}
+
+export function parseBackupMetadata(content) {
+  return Object.fromEntries(String(content || "").split(/\r?\n/).map((line) => {
+    const match = line.match(/^([A-Za-z0-9_.-]+):\s*(.*)$/);
+    return match ? [match[1], match[2].trim()] : null;
+  }).filter(Boolean));
+}
+
+export function stringifyBackupMetadata(metadata) {
+  return `${Object.entries(metadata).map(([key, value]) => `${key}: ${String(value || "")}`).join("\n")}\n`;
+}
+
+export function readCurrentBattlegroupId(config) {
+  try {
+    const text = readFileSync(resolve(config.generatedDir, "battlegroup.env"), "utf8");
+    return text.match(/^BATTLEGROUP_ID=(.*)$/m)?.[1]?.replace(/\\ /g, " ").trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+export function validBackupDownloadName(name) {
+  return /^dune-db-([a-z0-9][a-z0-9_-]*__)?[0-9]{8}-[0-9]{6}\.(dump|sql)$/i.test(name) ||
+    /^[a-z0-9][a-z0-9_-]*-[0-9]{8}-[0-9]{6}\.backup$/i.test(name);
+}
+
+export function createBackupDownloadArchive(files) {
+  return gzipSync(createTarArchive(files));
+}
+
+export function nextImportedBackupName(backupDir) {
+  const now = new Date();
+  for (let offset = 0; offset < 86400; offset += 1) {
+    const candidateDate = new Date(now.getTime() + offset * 1000);
+    const stamp = [
+      candidateDate.getFullYear(),
+      String(candidateDate.getMonth() + 1).padStart(2, "0"),
+      String(candidateDate.getDate()).padStart(2, "0")
+    ].join("") + "-" + [
+      String(candidateDate.getHours()).padStart(2, "0"),
+      String(candidateDate.getMinutes()).padStart(2, "0"),
+      String(candidateDate.getSeconds()).padStart(2, "0")
+    ].join("");
+    const name = `imported-backup-${stamp}.backup`;
+    if (!existsSync(resolve(backupDir, name)) && !existsSync(resolve(backupDir, `${name}.yaml`))) return name;
+  }
+  throw new Error("Could not allocate imported backup filename.");
+}
+
+function createTarArchive(files) {
+  const blocks = [];
+  for (const file of files) {
+    const header = Buffer.alloc(512, 0);
+    writeTarString(header, 0, 100, file.name);
+    writeTarOctal(header, 100, 8, 0o600);
+    writeTarOctal(header, 108, 8, 0);
+    writeTarOctal(header, 116, 8, 0);
+    writeTarOctal(header, 124, 12, file.content.length);
+    writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
+    header.fill(32, 148, 156);
+    header[156] = 48;
+    writeTarString(header, 257, 6, "ustar");
+    writeTarString(header, 263, 2, "00");
+    const checksum = header.reduce((sum, byte) => sum + byte, 0);
+    writeTarOctal(header, 148, 8, checksum);
+    blocks.push(header, file.content);
+    const padding = (512 - (file.content.length % 512)) % 512;
+    if (padding) blocks.push(Buffer.alloc(padding, 0));
+  }
+  blocks.push(Buffer.alloc(1024, 0));
+  return Buffer.concat(blocks);
+}
+
+function writeTarString(buffer, offset, length, value) {
+  buffer.write(String(value).slice(0, length - 1), offset, length, "utf8");
+}
+
+function writeTarOctal(buffer, offset, length, value) {
+  const text = value.toString(8).padStart(length - 1, "0").slice(0, length - 1);
+  buffer.write(text, offset, length - 1, "ascii");
+  buffer[offset + length - 1] = 0;
+}

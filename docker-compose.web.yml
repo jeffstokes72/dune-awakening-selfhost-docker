@@ -2,7 +2,7 @@ services:
   redblink-dune-docker-console:
     build:
       context: .
-      dockerfile: admin-server/Dockerfile
+      dockerfile: console/api/Dockerfile
     image: redblink-dune-docker-console:dev
     container_name: redblink-dune-docker-console
     restart: unless-stopped
