@@ -83,13 +83,74 @@ backup_metadata_value() {
   local backup_file="$1"
   local key="$2"
   local sidecar="${backup_file}.yaml"
+  local value=""
 
   [ -r "$sidecar" ] || return 1
-  awk -F': *' -v key="$key" '
+  value="$(awk -F': *' -v key="$key" '
     $1 == key {
       value = substr($0, length($1) + 2)
       sub(/^ */, "", value)
       print value
+      exit
+    }
+  ' "$sidecar")"
+
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+    return 0
+  fi
+
+  case "$key" in
+    battlegroup_id|imported_from_battlegroup_id)
+      backup_metadata_funcom_battlegroup_id "$sidecar"
+      return 0
+      ;;
+  esac
+
+  return 0
+}
+
+backup_metadata_funcom_battlegroup_id() {
+  local sidecar="$1"
+
+  awk '
+    function clean(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (value ~ /^".*"$/ || value ~ /^'\''.*'\''$/) value = substr(value, 2, length(value) - 2)
+      return value
+    }
+    function emit_candidate(value) {
+      value = clean(value)
+      if (value ~ /^funcom-seabass-sh-[A-Za-z0-9]+-[A-Za-z0-9]+$/) {
+        sub(/^funcom-seabass-/, "", value)
+      }
+      if (value ~ /^sh-[A-Za-z0-9]+-[A-Za-z0-9]+$/) {
+        print value
+        exit
+      }
+    }
+    /^[A-Za-z0-9_.-]+:/ {
+      section = $1
+      sub(/:.*/, "", section)
+      next
+    }
+    section == "metadata" && /^  name:[[:space:]]*/ {
+      value = $0
+      sub(/^  name:[[:space:]]*/, "", value)
+      emit_candidate(value)
+    }
+    section == "metadata" && /^  namespace:[[:space:]]*/ {
+      value = $0
+      sub(/^  namespace:[[:space:]]*/, "", value)
+      emit_candidate(value)
+    }
+    section == "spec" && /^  name:[[:space:]]*/ {
+      value = $0
+      sub(/^  name:[[:space:]]*/, "", value)
+      emit_candidate(value)
+    }
+    match($0, /sh-[A-Za-z0-9]+-[A-Za-z0-9]+/) {
+      print substr($0, RSTART, RLENGTH)
       exit
     }
   ' "$sidecar"

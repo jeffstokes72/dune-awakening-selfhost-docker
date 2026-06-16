@@ -41,14 +41,62 @@ export function normalizeImportedBackupMetadata(config, content) {
 }
 
 export function parseBackupMetadata(content) {
-  return Object.fromEntries(String(content || "").split(/\r?\n/).map((line) => {
+  const text = String(content || "");
+  const metadata = Object.fromEntries(text.split(/\r?\n/).map((line) => {
     const match = line.match(/^([A-Za-z0-9_.-]+):\s*(.*)$/);
     return match ? [match[1], match[2].trim()] : null;
   }).filter(Boolean));
+  const funcomBattlegroupId = extractFuncomBattlegroupId(text);
+  if (funcomBattlegroupId && !metadata.battlegroup_id) metadata.battlegroup_id = funcomBattlegroupId;
+  return metadata;
 }
 
 export function stringifyBackupMetadata(metadata) {
   return `${Object.entries(metadata).map(([key, value]) => `${key}: ${String(value || "")}`).join("\n")}\n`;
+}
+
+export function extractFuncomBattlegroupId(content) {
+  const text = String(content || "");
+  const candidates = [];
+  const lines = text.split(/\r?\n/);
+  let topLevelSection = "";
+
+  for (const rawLine of lines) {
+    const rootMatch = rawLine.match(/^([A-Za-z0-9_.-]+):(?:\s*(.*))?$/);
+    if (rootMatch) {
+      topLevelSection = rootMatch[1];
+      continue;
+    }
+
+    if (topLevelSection === "metadata") {
+      const nameMatch = rawLine.match(/^  name:\s*(.+)$/);
+      if (nameMatch) candidates.push(cleanYamlScalar(nameMatch[1]));
+
+      const namespaceMatch = rawLine.match(/^  namespace:\s*(.+)$/);
+      if (namespaceMatch) {
+        const namespace = cleanYamlScalar(namespaceMatch[1]);
+        const battlegroupMatch = namespace.match(/(?:^|-)funcom-seabass-(sh-[A-Za-z0-9]+-[A-Za-z0-9]+)$/i) ||
+          namespace.match(/^funcom-seabass-(sh-[A-Za-z0-9]+-[A-Za-z0-9]+)$/i);
+        if (battlegroupMatch) candidates.push(battlegroupMatch[1]);
+      }
+    }
+
+    if (topLevelSection === "spec") {
+      const specNameMatch = rawLine.match(/^  name:\s*(.+)$/);
+      if (specNameMatch) candidates.push(cleanYamlScalar(specNameMatch[1]));
+    }
+  }
+
+  const fallback = text.match(/\bsh-[A-Za-z0-9]+-[A-Za-z0-9]+\b/);
+  if (fallback) candidates.push(fallback[0]);
+
+  return candidates.find((value) => /^sh-[A-Za-z0-9]+-[A-Za-z0-9]+$/.test(value)) || "";
+}
+
+function cleanYamlScalar(value) {
+  const trimmed = String(value || "").trim();
+  const quoted = trimmed.match(/^(['"])(.*)\1$/);
+  return (quoted ? quoted[2] : trimmed).trim();
 }
 
 export function readCurrentBattlegroupId(config) {
