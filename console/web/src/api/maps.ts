@@ -26,7 +26,7 @@ export type LiveMapMemoryRow = {
   raw: string;
 };
 
-export type SwapMemoryState = {
+export type MemoryBalancerState = {
   enabled: boolean;
   running: boolean;
   lastMessage: string;
@@ -48,8 +48,8 @@ export const mapsApi = {
   autoscalerAction: (action: string, confirmation: string) => post<{ task: Task }>("/api/maps/autoscaler", { action, confirmation }),
   memory: () => api<{ stdout: string }>("/api/maps/memory"),
   liveMemory: () => api<{ rows: LiveMapMemoryRow[]; sampledAt: string; error?: string }>("/api/maps/memory/live"),
-  swapMemory: () => api<SwapMemoryState>("/api/maps/memory/swap"),
-  setSwapMemory: (enabled: boolean) => post<SwapMemoryState>("/api/maps/memory/swap", { enabled }),
+  memoryBalancer: () => api<MemoryBalancerState>("/api/maps/memory/balancer"),
+  setMemoryBalancer: (enabled: boolean) => post<MemoryBalancerState>("/api/maps/memory/balancer", { enabled }),
   setMemory: (body: { map: string; memory: string; confirmation: string }) => post<{ task: Task }>("/api/maps/memory", { ...body, action: "set" }),
   unsetMemory: (body: { map: string; confirmation: string }) => post<{ task: Task }>("/api/maps/memory", { ...body, action: "unset" }),
   userEngine: () => api<{ stdout: string; stderr?: string; exitCode?: number }>("/api/maps/userengine"),

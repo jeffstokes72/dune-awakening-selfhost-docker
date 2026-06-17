@@ -1093,9 +1093,9 @@ tr.clickable:hover { background: rgba(198, 139, 74, .12); }
 }
 .live-map-auto-toggle { width: auto; }
 .maps-title-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
-.maps-swap-status { color: var(--muted-warm); font-size: .92rem; white-space: nowrap; }
-.maps-swap-status.danger { color: var(--danger-text); }
-.maps-swap-toggle { width: auto; }
+.maps-memory-balancer-status { color: var(--muted-warm); font-size: .92rem; white-space: nowrap; }
+.maps-memory-balancer-status.danger { color: var(--danger-text); }
+.maps-memory-balancer-toggle { width: auto; }
 .live-map-layer-list { display: grid; gap: 8px; }
 .live-map-layer { justify-content: flex-start; width: 100%; min-height: 34px; color: #d9c8aa; }
 .live-map-layer input { width: auto; margin: 0; accent-color: #c68b4a; }

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Grid2X2, List, Lock } from "lucide-react";
-import { mapsApi, type LiveMapMemoryRow, type SwapMemoryState, type UserSettingField, type UserSettingsSchema } from "../../api/maps";
+import { mapsApi, type LiveMapMemoryRow, type MemoryBalancerState, type UserSettingField, type UserSettingsSchema } from "../../api/maps";
 import { setupApi, type Task } from "../../api/setup";
 import { SecretInput } from "../../components/SecretInput";
 import { KeyValueGrid, StatusPill, TechnicalDetails } from "../../components/common/DisplayPrimitives";
@@ -185,8 +185,8 @@ export function MapsPanel({ onError, confirmAction, confirmSettingsRestart, wait
   const [rawGameOriginal, setRawGameOriginal] = useState("");
   const [liveMemory, setLiveMemory] = useState<LiveMapMemoryRow[]>([]);
   const [memoryError, setMemoryError] = useState("");
-  const [swapMemory, setSwapMemory] = useState<SwapMemoryState | null>(null);
-  const [swapMemorySaving, setSwapMemorySaving] = useState(false);
+  const [memoryBalancer, setMemoryBalancer] = useState<MemoryBalancerState | null>(null);
+  const [memoryBalancerSaving, setMemoryBalancerSaving] = useState(false);
   const [sietchesText, setSietchesText] = useState("");
   const [sietchDimensionsText, setSietchDimensionsText] = useState("");
   const [sietchDimensionIdsText, setSietchDimensionIdsText] = useState("");
@@ -426,16 +426,16 @@ export function MapsPanel({ onError, confirmAction, confirmSettingsRestart, wait
     setLiveMemory(result.rows || []);
     setMemoryError(result.error || "");
   }
-  async function loadSwapMemory() {
-    setSwapMemory(await mapsApi.swapMemory());
+  async function loadMemoryBalancer() {
+    setMemoryBalancer(await mapsApi.memoryBalancer());
   }
-  async function toggleSwapMemory() {
-    setSwapMemorySaving(true);
+  async function toggleMemoryBalancer() {
+    setMemoryBalancerSaving(true);
     try {
-      setSwapMemory(await mapsApi.setSwapMemory(!swapMemory?.enabled));
+      setMemoryBalancer(await mapsApi.setMemoryBalancer(!memoryBalancer?.enabled));
       await loadLiveMemory();
     } finally {
-      setSwapMemorySaving(false);
+      setMemoryBalancerSaving(false);
     }
   }
   useEffect(() => {
@@ -443,7 +443,7 @@ export function MapsPanel({ onError, confirmAction, confirmSettingsRestart, wait
     run(loadSchema);
     run(loadUserEngine);
     run(loadLiveMemory);
-    run(loadSwapMemory);
+    run(loadMemoryBalancer);
     run(loadSietches);
   }, []);
   useEffect(() => {
@@ -507,7 +507,7 @@ export function MapsPanel({ onError, confirmAction, confirmSettingsRestart, wait
     return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
-    const id = window.setInterval(() => { void loadSwapMemory().catch(() => {}); }, 5000);
+    const id = window.setInterval(() => { void loadMemoryBalancer().catch(() => {}); }, 5000);
     return () => window.clearInterval(id);
   }, []);
   useEffect(() => {
@@ -996,7 +996,7 @@ export function MapsPanel({ onError, confirmAction, confirmSettingsRestart, wait
   const modifiersAvailable = mapsLoaded;
   const advancedAvailable = mapsLoaded;
   return <section className="panel maps-panel">
-    <div className="panel-title"><h2>Maps & Sietches</h2><div className="maps-title-actions">{swapMemory?.enabled && <span className={`maps-swap-status ${swapMemory.lastError ? "danger" : ""}`}>{swapMemory.lastError ? `Memory Balancer error: ${swapMemory.lastError}` : swapMemory.lastMessage || "Memory Balancer is monitoring running maps"}</span>}<button className={`switch-toggle maps-swap-toggle ${swapMemory?.enabled ? "enabled" : "disabled"}`} disabled={swapMemorySaving} onClick={() => run(toggleSwapMemory)}><span className="switch-label">Memory Balancer</span><strong className="switch-state">{swapMemory?.enabled ? "ON" : "OFF"}</strong></button><button disabled={loading} onClick={() => run(loadMaps)}>{loading ? "Refreshing..." : "Refresh Maps"}</button></div></div>
+    <div className="panel-title"><h2>Maps & Sietches</h2><div className="maps-title-actions">{memoryBalancer?.enabled && <span className={`maps-memory-balancer-status ${memoryBalancer.lastError ? "danger" : ""}`}>{memoryBalancer.lastError ? `Memory Balancer error: ${memoryBalancer.lastError}` : memoryBalancer.lastMessage || "Memory Balancer is monitoring running maps"}</span>}<button className={`switch-toggle maps-memory-balancer-toggle ${memoryBalancer?.enabled ? "enabled" : "disabled"}`} disabled={memoryBalancerSaving} onClick={() => run(toggleMemoryBalancer)}><span className="switch-label">Memory Balancer</span><strong className="switch-state">{memoryBalancer?.enabled ? "ON" : "OFF"}</strong></button><button disabled={loading} onClick={() => run(loadMaps)}>{loading ? "Refreshing..." : "Refresh Maps"}</button></div></div>
     {mapsResult && mapsResultScope === "maps" ? <div className="maps-result-slot"><HomeTaskResultCard result={mapsResult} /></div> : null}
     <section className="action-section">
       <h4>Maps Overview</h4>

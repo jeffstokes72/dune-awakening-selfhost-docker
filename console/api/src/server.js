@@ -413,8 +413,8 @@ async function handleApi(req, res) {
   if (path === "/api/maps/autoscaler" && req.method === "POST") return confirmedTask(req, res, "maps", "autoscalerAction", {}, "AUTOSCALER CHANGE");
   if (path === "/api/maps/autoscaler") return commandJson(res, "autoscalerStatus");
   if (path === "/api/maps/memory" && req.method === "POST") return memoryRoute(req, res);
-  if (path === "/api/maps/memory/swap" && req.method === "POST") return swapMemoryRoute(req, res);
-  if (path === "/api/maps/memory/swap") return json(res, 200, memoryBalancer.publicState());
+  if (path === "/api/maps/memory/balancer" && req.method === "POST") return memoryBalancerRoute(req, res);
+  if (path === "/api/maps/memory/balancer") return json(res, 200, memoryBalancer.publicState());
   if (path === "/api/maps/memory/live") return liveMapMemoryRoute(res);
   if (path === "/api/maps/memory") return commandJson(res, "memoryStatus");
   if (path === "/api/maps/user-settings/schema") return userSettingsSchemaRoute(res);
@@ -949,13 +949,13 @@ async function memoryRoute(req, res) {
   return task(req, res, "maps", operation, body);
 }
 
-async function swapMemoryRoute(req, res) {
+async function memoryBalancerRoute(req, res) {
   const body = await readJson(req);
   const enabled = Boolean(body.enabled);
   if (enabled === memoryBalancer.publicState().enabled) return json(res, 200, memoryBalancer.publicState());
 
   const state = await memoryBalancer.setEnabled(enabled);
-  audit(config, req, "maps.memory.swap", { enabled });
+  audit(config, req, "maps.memory.balancer", { enabled });
   return json(res, 200, state);
 }
 

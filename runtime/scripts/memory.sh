@@ -335,7 +335,7 @@ apply_live_memory_to_container() {
 
   [ -n "$container" ] || return 0
   echo "Applying live memory limit ${memory} to ${container}."
-  docker update --memory "$memory" --memory-reservation "$memory" "$container" >/dev/null
+  docker update --memory "$memory" --memory-swap "$memory" --memory-reservation "$memory" "$container" >/dev/null
 }
 
 apply_live_memory_to_map_if_running() {
