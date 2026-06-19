@@ -102,11 +102,11 @@ function taskTitle(task: Task) {
 function taskMessage(task: Task) {
   if (task.operation === "init") return initTaskMessage(task);
   if (task.operation !== "backupRestore") return task.progressMessage || task.currentStep;
-  if (task.status === "succeeded") return "Database restore finished and the Dune stack restart completed.";
+  if (task.status === "succeeded") return "Database restore finished and the Dune console restart completed.";
   if (task.status === "failed") return task.errorMessage || "Database restore failed.";
 
   const lines = task.logLines.map((row) => row.line).join("\n");
-  if (/Starting Dune stack|Restarting Dune stack|Starting services/i.test(lines)) return "Restarting Dune services and waiting for the stack to come back up.";
+  if (/Starting Dune stack|Restarting Dune stack|Starting services/i.test(lines)) return "Restarting Dune services and waiting for the console to come back up.";
   if (/Database import finished/i.test(lines)) return "Database restore finished. Restarting services.";
   if (/Automatic account relink/i.test(lines)) return "Relinking restored characters to current Docker player identities.";
   if (/Battlegroup remap:/i.test(lines)) return "Adapting imported backup to this Docker battlegroup.";

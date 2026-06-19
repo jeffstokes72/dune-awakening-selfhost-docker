@@ -225,7 +225,7 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0, mode = "redeploy",
             </section>
             <section className="action-section">
               <h4>Internal Map Traffic</h4>
-              <p>IGW/S2S UDP ports start at 7888 for map-to-map traffic inside the stack. Do not forward these publicly for a normal single-host Docker setup.</p>
+              <p>IGW/S2S UDP ports start at 7888 for map-to-map traffic inside the console. Do not forward these publicly for a normal single-host Docker setup.</p>
             </section>
             <section className="action-section">
               <h4>Do Not Publicly Expose</h4>
@@ -282,7 +282,7 @@ export function SetupWizard({ initialStep = 0, jumpNonce = 0, mode = "redeploy",
           <h2>{mode === "first-run" ? "Deploy Server" : "Redeploy Server"}</h2>
           <p>{mode === "first-run"
             ? "This starts the Dune Docker deployment. The console will prepare local settings, download required server assets, update the database, and start the game services. First-time deployment can take a while, so keep this page open while the progress updates."
-            : "This reapplies your server identity and Funcom token settings, then restarts the deployment flow so the stack uses the updated values. Keep this page open while the progress updates."}</p>
+            : "This reapplies your server identity and Funcom token settings, then restarts the deployment flow so the console uses the updated values. Keep this page open while the progress updates."}</p>
           <button disabled={deploymentRunning || deploymentSucceeded} onClick={init}>{deploymentSucceeded ? "Redeploy Complete" : deploymentRunning ? "Redeploying..." : mode === "first-run" ? "Start Deployment" : "Start Redeploy"}</button>
           <TaskProgress task={task} />
           {deploymentSucceeded && <p className="success-note">{mode === "first-run" ? "Deployment was successful." : "Redeploy was successful."} Opening the finish step.</p>}

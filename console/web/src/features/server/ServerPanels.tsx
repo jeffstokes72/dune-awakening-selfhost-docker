@@ -112,8 +112,8 @@ export function HomePanel({ status, readiness, taskResult, setTaskResult, funcom
   }
 
   async function runServerAction(action: "start" | "stop" | "restart") {
-    if (action === "stop" && !(await confirmAction("Stop the Dune server stack?"))) return;
-    if (action === "restart" && !(await confirmAction("Restart the Dune server stack?"))) return;
+    if (action === "stop" && !(await confirmAction("Stop the Dune server console?"))) return;
+    if (action === "restart" && !(await confirmAction("Restart the Dune server console?"))) return;
     const actionRunId = ++homeActionRunId.current;
     homeActionStartedAt.current = Date.now();
     let commandAction = action;
@@ -523,7 +523,7 @@ export function ServerPanel(props: {
       setFuncomTokenResult({ status: "failed", title: "Token Save Failed", message: "Funcom token cannot be empty." });
       return;
     }
-    if (!(await confirmAction("Save the new Funcom token and restart the Dune stack so services reload it?"))) return;
+    if (!(await confirmAction("Save the new Funcom token and restart the Dune console so services reload it?"))) return;
     const checkSince = new Date().toISOString();
     setFuncomTokenResult({ status: "running", title: "Saving Funcom Token..." });
     props.onError("");
@@ -549,8 +549,8 @@ export function ServerPanel(props: {
     if (statusResult.status === "rejected") throw statusResult.reason;
   }
   async function runServerAction(action: "start" | "stop" | "restart") {
-    if (action === "stop" && !(await confirmAction("Stop the Dune server stack?"))) return;
-    if (action === "restart" && !(await confirmAction("Restart the Dune server stack?"))) return;
+    if (action === "stop" && !(await confirmAction("Stop the Dune server console?"))) return;
+    if (action === "restart" && !(await confirmAction("Restart the Dune server console?"))) return;
     serviceRestartRunId.current += 1;
     setServiceRestartingService("");
     const actionRunId = ++controlActionRunId.current;
