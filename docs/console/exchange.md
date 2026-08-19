@@ -146,6 +146,16 @@ Exchange Bot addon drives through the scheduler bridge, now first-class):
   `runtime/generated/market-bot/buyback-log.json` (20 most recent, dropped
   after 5 days). The scheduler prunes expired batches at most hourly even when
   buyback is disabled.
+- **Backup labeling and retention**: every Market Bot database write is preceded
+  by a backup whose filename carries the origin (for example
+  `dune-db-market-bot-buyback-<scope>-<timestamp>.backup`; the sidecar's
+  `backup_origin` records `market-bot-seed`, `market-bot-buyback`, or
+  `market-bot-unseed`), and the Backups page shows them as **Market Bot
+  Backup**. Because schedules mint backups unattended, only the **5 newest**
+  Market Bot backups are kept: after every successful Market Bot backup, older
+  ones are pruned by the sidecar origin — including unlabeled ones written by
+  earlier releases. Manual, automatic, and safety backups are never candidates.
+  Set `DUNE_MARKET_BOT_BACKUP_KEEP` to change the count.
 - **Schedules** run unattended inside the console API process (no browser page needs
   to stay open) and survive restarts. They are console-owned and authorized by RBAC
   at save time. Seed and buyback share one running lock, so they can never write the
