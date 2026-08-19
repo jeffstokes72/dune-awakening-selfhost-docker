@@ -108,6 +108,14 @@ Exchange Bot addon drives through the scheduler bridge, now first-class):
   multiplier is applied before the usual stepped price rounding, and relative
   pricing within a category is preserved (a discounted augment item stays at
   half its pattern's price when both are boosted).
+- **Commodity stacks** let the operator set how many full listings of selected
+  base-useful commodities each reseed writes (1–20, default 2 — the bundled
+  plan's `listings_per_grade`). Units per stack stay at the plan maximum, so
+  10 Fuel Cell stacks is 5,000 units. The allowlist is power fuels and
+  lubricants, windtrap filters, spice (melange, residue, flour sand, spice
+  sand), refining ingots, building materials, schematic pattern fragments, and
+  iodine pills. Everything else keeps the plan default. Buyback caps are
+  per-unit and do not change.
 - **Remove NPC listings** (unseed) empties the bot's own listings on the selected
   exchange without reseeding — the "clear market" ability the EDA bot had before
   Market Bot became console-native. The console counts the bot's listings
