@@ -108,6 +108,14 @@ Exchange Bot addon drives through the scheduler bridge, now first-class):
   multiplier is applied before the usual stepped price rounding, and relative
   pricing within a category is preserved (a discounted augment item stays at
   half its pattern's price when both are boosted).
+- **Remove NPC listings** (unseed) empties the bot's own listings on the selected
+  exchange without reseeding — the "clear market" ability the EDA bot had before
+  Market Bot became console-native. The console counts the bot's listings
+  read-only first and only takes a backup + clears when there is something to
+  remove. Player listings and pending seller "Take Solari" payments are never
+  touched (payments are owned by the seller, not the bot). The seed schedule is
+  left as-is, so an **enabled** reseed schedule repopulates the market on its
+  next run; disable the schedule to keep the market unseeded.
 - **Buyback sweeps** buy player sell listings whose per-unit ask is at or below the
   buyback percentage of the chosen **price basis** — seeded NPC price at that
   listing's grade (default), or the live player-market average / lowest ask with

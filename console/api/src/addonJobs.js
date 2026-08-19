@@ -30,6 +30,7 @@ import {
   writeSeedSchedule,
   persistSeedRunCompletion,
   executeSeedRun,
+  executeUnseedRun,
   normalizeCategoryMultipliers,
   normalizeScheduleSource,
   normalizeAugmentPricing,
@@ -39,7 +40,7 @@ import {
   listedMarketUnitPrice
 } from "./addonSeedJob.js";
 
-export { CATEGORY_MULTIPLIER_FIELDS, readSeedSchedule, normalizeSeedSchedule, saveSeedSchedule, normalizeCategoryMultipliers, normalizeScheduleSource, resolveMarketSeedPlanPath, legacySeedSchedulePath, seedSchedulePath, loadMarketSeedPlan, seedRowCategoryMultiplier, listedMarketUnitPrice, normalizeAugmentPricing } from "./addonSeedJob.js";
+export { CATEGORY_MULTIPLIER_FIELDS, readSeedSchedule, normalizeSeedSchedule, saveSeedSchedule, normalizeCategoryMultipliers, normalizeScheduleSource, resolveMarketSeedPlanPath, legacySeedSchedulePath, seedSchedulePath, loadMarketSeedPlan, seedRowCategoryMultiplier, listedMarketUnitPrice, normalizeAugmentPricing, buildMarketUnseedSql, buildBotListingCountSql, executeUnseedRun } from "./addonSeedJob.js";
 
 export const EDA_EXCHANGE_BOT_ADDON_ID = "eda-exchange-bot";
 export const ADDON_SCHEDULER_PERMISSION = "scheduler:server";
@@ -871,8 +872,36 @@ export function createAddonJobScheduler(config, options = {}) {
     }
   }
 
-  async function runNow({ trigger = "manual", job = "buyback" } = {}) {
+  async function runNow({ trigger = "manual", job = "buyback", exchangeId = "" } = {}) {
     if (running) throw new Error("An exchange scheduled job is already in progress.");
+    if (job === "unseed") {
+      // Manual-only clear of the bot's NPC listings (no reseed). Targets the
+      // explicitly requested exchange, falling back to the saved seed
+      // schedule's only when none was requested — a malformed id is an error,
+      // never a silent retarget. Shares the running lock so it can never race
+      // a sweep or reseed, and deliberately leaves the seed schedule
+      // untouched: an enabled reseed schedule will repopulate on its next run.
+      const requested = String(exchangeId ?? "").trim();
+      const targetExchangeId = requested ? normalizeExchangeId(requested) : readSeedSchedule(config).exchangeId;
+      if (requested && !targetExchangeId) throw new Error("Unseed exchangeId must be a positive whole number (PostgreSQL BIGINT).");
+      if (!targetExchangeId) throw new Error("Select an exchange (or save a seed schedule) before removing the bot's NPC listings.");
+      running = true;
+      try {
+        const outcome = await executeUnseedRun(config, getDb(), targetExchangeId, { runDuneImpl, buildDuneArgs, runSql });
+        auditJob("unseed", trigger, {
+          status: outcome.status,
+          removedListings: outcome.removedListings,
+          exchangeId: targetExchangeId,
+          ok: true
+        });
+        return outcome;
+      } catch (error) {
+        auditJob("unseed", trigger, { status: "error", exchangeId: targetExchangeId, ok: false, error: redact(String(error?.message || "Unexpected error.")) });
+        throw error;
+      } finally {
+        running = false;
+      }
+    }
     if (job === "seed") {
       const schedule = readSeedSchedule(config);
       if (!schedule.exchangeId) throw new Error("Save a seed schedule with an exchangeId before running a manual reseed.");
