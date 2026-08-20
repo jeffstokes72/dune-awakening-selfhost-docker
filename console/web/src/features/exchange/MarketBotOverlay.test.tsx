@@ -474,4 +474,15 @@ describe("MarketBotOverlay", () => {
     expect(await screen.findByText(/Imported 1 row\(s\) as "Cheap Water"/)).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
+
+  it("rejects SQL or non-CSV uploads before calling the import API", async () => {
+    const props = renderOverlay();
+    fireEvent.change(await screen.findByLabelText("Seed Plan Name"), { target: { value: "Cheap Water" } });
+    const sqlFile = new File(["INSERT INTO items VALUES (1);"], "attack.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Upload CSV"), { target: { files: [sqlFile] } });
+    await waitFor(() => {
+      expect(props.onError.mock.calls.some((call) => /SQL script/i.test(String(call[0])))).toBe(true);
+    });
+    expect(marketBotApi.uploadPlanCsv).not.toHaveBeenCalled();
+  });
 });

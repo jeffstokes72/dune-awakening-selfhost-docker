@@ -8,6 +8,7 @@ import {
   COMMODITY_STACK_GROUPS
 } from "../addonJobs.js";
 import {
+  decodeSeedPlanCsvUpload,
   exportMarketSeedPlanCsv,
   importMarketSeedPlanFromCsv,
   listMarketSeedPlans,
@@ -17,6 +18,7 @@ import {
 } from "./marketSeedPlans.js";
 
 export {
+  decodeSeedPlanCsvUpload,
   exportMarketSeedPlanCsv,
   importMarketSeedPlanFromCsv,
   listMarketSeedPlans,

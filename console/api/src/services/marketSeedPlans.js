@@ -4,6 +4,9 @@
 // under runtime/generated/market-bot/plans/ and never overwrite the shipped
 // runtime/data/market-seed-plan.json.
 //
+// CSV import is allowlisted: only the seed-plan name/number columns are stored.
+// Extra metadata, SQL/JSON/HTML, formulas, and non-numeric cells are rejected.
+//
 // Seed and buyback jobs resolve the active plan through
 // resolveActiveMarketSeedPlanPath; unsafe template ids always come from the
 // shipped plan so a CSV cannot un-block NPC-only / story items.
@@ -18,6 +21,9 @@ export const MAX_CUSTOM_SEED_PLANS = 25;
 export const MAX_SEED_PLAN_NAME_LENGTH = 80;
 export const MAX_SEED_PLAN_BYTES = 10 * 1024 * 1024;
 export const MAX_SEED_PLAN_ROWS = 20000;
+export const MAX_CSV_FIELD_LENGTH = 200;
+export const MAX_TEMPLATE_ID_LENGTH = 80;
+export const MAX_DISPLAY_NAME_LENGTH = 80;
 
 const EDA_EXCHANGE_BOT_ADDON_ID = "eda-exchange-bot";
 const PLANS_DIR = "runtime/generated/market-bot/plans";
@@ -71,6 +77,29 @@ const CSV_HEADER_ALIASES = {
   durability_max: "durability_max",
   durabilitymax: "durability_max"
 };
+
+export const SEED_PLAN_ALLOWED_KINDS = Object.freeze([
+  "ammunition",
+  "cartography",
+  "consumable",
+  "equippable",
+  "resource",
+  "schematic",
+  "utility"
+]);
+
+const ALLOWED_KIND_SET = new Set(SEED_PLAN_ALLOWED_KINDS);
+const TEMPLATE_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,79}$/;
+const DISPLAY_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N} .\-'’]{0,79}$/u;
+const INTEGER_PATTERN = /^[0-9]+$/;
+const DURABILITY_PATTERN = /^[0-9]+(?:\.0+)?$/;
+const HEADER_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9 _-]*$/;
+const SQL_START_PATTERN = /^(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|UNION|EXEC|EXECUTE|WITH|MERGE|GRANT|REVOKE|CALL|DECLARE|PRAGMA)\b/i;
+const SQL_KEYWORD_PATTERN = /^(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|UNION|EXEC|EXECUTE|WITH|MERGE|GRANT|REVOKE|CALL|DECLARE|PRAGMA|TABLE|FROM|WHERE|INTO|VALUES|SET|JOIN|HAVING|GROUP|ORDER|BY|AND|OR|NOT|NULL|TRUE|FALSE)$/i;
+const FORMULA_PREFIX_PATTERN = /^[=+@|\t]/;
+const UNSAFE_NAME_TOKEN_PATTERN = /--|\/\*|\*\/|;|''|`|\\|<|>|@|=|\||\t/;
+const CONTROL_CHAR_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+const SEED_PLAN_ROW_KEYS = new Set(SEED_PLAN_CSV_COLUMNS);
 
 const AUGMENT_TEMPLATE_PATTERN = /^T\d+_Augment_/i;
 
@@ -228,9 +257,30 @@ export function exportMarketSeedPlanCsv(config, planId) {
   return { id, name: match.name, filename, csv, rows: rows.length };
 }
 
+export function decodeSeedPlanCsvUpload(content, fileName) {
+  const rawName = String(fileName || "");
+  if (rawName && !/\.csv$/i.test(rawName)) {
+    throw new Error("Seed plan uploads must be CSV files.");
+  }
+  const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content ?? ""), "utf8");
+  if (buf.length > MAX_SEED_PLAN_BYTES) throw new Error("Seed plan CSV is too large.");
+  if (buf.length >= 2 && ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff))) {
+    throw new Error("CSV must be UTF-8 text.");
+  }
+  for (let i = 0; i < buf.length; i += 1) {
+    const byte = buf[i];
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) {
+      throw new Error("CSV contains binary data and cannot be imported.");
+    }
+  }
+  const text = buf.toString("utf8");
+  assertSeedPlanCsvText(text);
+  return text;
+}
+
 export function importMarketSeedPlanFromCsv(config, { csvText, name, planId, fileName } = {}) {
   const text = String(csvText || "");
-  if (!text.trim()) throw new Error("The uploaded CSV is empty.");
+  assertSeedPlanCsvText(text);
   if (Buffer.byteLength(text, "utf8") > MAX_SEED_PLAN_BYTES) throw new Error("Seed plan CSV is too large.");
 
   const shippedPath = resolveShippedMarketSeedPlanPath(config);
@@ -270,7 +320,7 @@ export function importMarketSeedPlanFromCsv(config, { csvText, name, planId, fil
     panel_version: shipped.panel_version || "",
     price_multiplier: Math.max(1, Number(shipped.price_multiplier) || 5),
     market_bot_class: shipped.market_bot_class || "Revy",
-    imported_from: String(fileName || "").slice(0, 200),
+    imported_from: sanitizeImportedFileName(fileName),
     rows
   };
   writeJsonAtomic(customPlanFilePath(config, targetId), plan, 0o600, { pretty: false });
@@ -303,6 +353,23 @@ export function stringifySeedPlanCsv(rows) {
   return `\uFEFF${lines.join("\n")}\n`;
 }
 
+export function assertSeedPlanCsvText(text) {
+  const source = String(text ?? "");
+  if (!source.trim()) throw new Error("The uploaded CSV is empty.");
+  if (CONTROL_CHAR_PATTERN.test(source) || source.includes("\u0000")) {
+    throw new Error("CSV contains binary data and cannot be imported.");
+  }
+  const body = source.replace(/^\uFEFF/, "").trimStart();
+  if (!body) throw new Error("The uploaded CSV is empty.");
+  const first = body[0];
+  if (first === "{" || first === "[" || first === "<") {
+    throw new Error("Upload a CSV file with a header row, not JSON or HTML.");
+  }
+  if (SQL_START_PATTERN.test(body) || body.startsWith("--") || body.startsWith("/*")) {
+    throw new Error("Upload a CSV file with a header row, not a SQL script.");
+  }
+}
+
 export function parseCsv(text) {
   const source = String(text || "").replace(/^\uFEFF/, "");
   if (!source.trim()) return [];
@@ -327,41 +394,42 @@ export function parseCsv(text) {
     } else if (char === '"') {
       inQuotes = true;
     } else if (char === delimiter) {
-      row.push(field);
+      pushCsvField(row, field);
       field = "";
     } else if (char === "\n") {
       if (field.endsWith("\r")) field = field.slice(0, -1);
-      row.push(field);
+      pushCsvField(row, field);
       if (row.some((value) => String(value).trim() !== "")) rows.push(row);
       row = [];
       field = "";
     } else {
       field += char;
     }
+    if (field.length > MAX_CSV_FIELD_LENGTH) {
+      throw new Error(`CSV fields must be ${MAX_CSV_FIELD_LENGTH} characters or fewer.`);
+    }
   }
   if (inQuotes) throw new Error("CSV has an unclosed quoted field.");
   if (field.length || row.length) {
     if (field.endsWith("\r")) field = field.slice(0, -1);
-    row.push(field);
+    pushCsvField(row, field);
     if (row.some((value) => String(value).trim() !== "")) rows.push(row);
   }
   return rows;
 }
 
 export function csvToPlanRows(csvText, shippedPlan = { rows: [] }, unsafeIds = []) {
+  assertSeedPlanCsvText(csvText);
   const table = parseCsv(csvText);
   if (table.length < 2) throw new Error("CSV must include a header row and at least one seed row.");
-  const headers = table[0].map((header) => normalizeCsvHeader(header));
-  if (!headers.includes("template_id")) {
-    throw new Error("CSV must include a template_id column.");
-  }
+  const headers = canonicalizeCsvHeaders(table[0], table.slice(1));
   const shippedRows = Array.isArray(shippedPlan?.rows) ? shippedPlan.rows : [];
   const bundledByKey = new Map();
   const bundledByTemplate = new Map();
   for (const row of shippedRows) {
     const templateId = String(row?.template_id || "").trim();
     if (!templateId) continue;
-    const qualityLevel = clampInt(row?.quality_level, 0, 0, 5);
+    const qualityLevel = bundledInt(row?.quality_level, 0, 0, 5);
     bundledByKey.set(rowKey(templateId, qualityLevel), row);
     if (!bundledByTemplate.has(templateId)) bundledByTemplate.set(templateId, []);
     bundledByTemplate.get(templateId).push(row);
@@ -377,15 +445,23 @@ export function csvToPlanRows(csvText, shippedPlan = { rows: [] }, unsafeIds = [
     }
     const record = rowToRecord(headers, table[index]);
     const templateId = String(record.template_id || "").trim();
-    if (!templateId) continue;
-    if (templateId.length > 200) throw new Error(`CSV row ${index + 1} has an invalid template_id.`);
+    if (!templateId) {
+      if (Object.entries(record).some(([key, value]) => key && String(value || "").trim() !== "")) {
+        throw new Error(`CSV row ${index + 1} is missing template_id.`);
+      }
+      continue;
+    }
+    assertValidTemplateId(templateId, index + 1);
     if (unsafeSet.has(templateId)) {
       unsafeHits.push(templateId);
       continue;
     }
     const hasQuality = record.quality_level !== undefined && String(record.quality_level).trim() !== "";
+    const qualityLevel = hasQuality
+      ? parseStrictInt(record.quality_level, { min: 0, max: 5, field: "quality_level", rowNumber: index + 1, templateId })
+      : undefined;
     const bases = hasQuality
-      ? [bundledByKey.get(rowKey(templateId, clampInt(record.quality_level, 0, 0, 5))) || null]
+      ? [bundledByKey.get(rowKey(templateId, qualityLevel)) || null]
       : (bundledByTemplate.get(templateId) || [null]);
     for (const base of bases) {
       const merged = mergeImportedRow(record, base, index + 1);
@@ -420,36 +496,82 @@ function assertAugmentSchematicGrades(rows) {
 
 function mergeImportedRow(record, base, rowNumber) {
   const templateId = String(record.template_id || base?.template_id || "").trim();
-  const qualityLevel = clampInt(
-    firstDefined(record.quality_level, base?.quality_level),
-    0,
-    0,
-    5
-  );
-  const price = Number(firstDefined(record.price, base?.price));
-  if (!Number.isFinite(price) || price <= 0) {
+  assertValidTemplateId(templateId, rowNumber);
+  const qualityLevel = parseOptionalInt(firstDefined(record.quality_level, base?.quality_level), {
+    min: 0,
+    max: 5,
+    field: "quality_level",
+    rowNumber,
+    templateId,
+    fallback: 0
+  });
+  const price = parseOptionalInt(firstDefined(record.price, base?.price), {
+    min: 1,
+    max: 999999999,
+    field: "price",
+    rowNumber,
+    templateId
+  });
+  if (price === undefined) {
     throw new Error(`CSV row ${rowNumber} (${templateId}) is missing a valid price and is not in the bundled seed plan.`);
   }
-  const listings = Math.max(1, Math.trunc(Number(firstDefined(record.listings, base?.listings)) || 1));
-  const stackSize = Math.max(1, Math.trunc(Number(firstDefined(record.stack_size, base?.stack_size)) || 1));
-  const kind = String(firstDefined(record.kind, base?.kind) || "equippable").slice(0, 40);
-  const displayName = String(firstDefined(record.display_name, base?.display_name) || templateId).slice(0, 200);
-  const durabilityMax = clampInt(firstDefined(record.durability_max, base?.durability_max, base?.durability_cur, 100), 100, 100, 200);
+  const listings = parseOptionalInt(firstDefined(record.listings, base?.listings), {
+    min: 1,
+    max: 99,
+    field: "listings",
+    rowNumber,
+    templateId,
+    fallback: 1
+  });
+  const stackSize = parseOptionalInt(firstDefined(record.stack_size, base?.stack_size), {
+    min: 1,
+    max: 100000,
+    field: "stack_size",
+    rowNumber,
+    templateId,
+    fallback: 1
+  });
+  const kind = parseKind(firstDefined(record.kind, base?.kind), rowNumber, templateId);
+  const displayName = parseDisplayName(firstDefined(record.display_name, base?.display_name), templateId, rowNumber);
+  const durabilityMax = parseDurability(firstDefined(record.durability_max, base?.durability_max, base?.durability_cur), {
+    field: "durability_max",
+    rowNumber,
+    templateId,
+    fallback: 100
+  });
   const durabilityCur = Math.min(
-    clampInt(firstDefined(record.durability_cur, base?.durability_cur, durabilityMax), durabilityMax, 100, 200),
+    parseDurability(firstDefined(record.durability_cur, base?.durability_cur), {
+      field: "durability_cur",
+      rowNumber,
+      templateId,
+      fallback: durabilityMax
+    }),
     durabilityMax
   );
   return {
-    ...(base && typeof base === "object" ? base : {}),
     template_id: templateId,
     display_name: displayName,
     kind,
     stack_size: stackSize,
     price,
-    category_mask: Math.trunc(Number(firstDefined(record.category_mask, base?.category_mask)) || 0),
-    category_depth: clampInt(firstDefined(record.category_depth, base?.category_depth), 1, 0, 4),
+    category_mask: parseOptionalInt(firstDefined(record.category_mask, base?.category_mask), {
+      min: 0,
+      max: 2147483647,
+      field: "category_mask",
+      rowNumber,
+      templateId,
+      fallback: 0
+    }),
+    category_depth: parseOptionalInt(firstDefined(record.category_depth, base?.category_depth), {
+      min: 0,
+      max: 4,
+      field: "category_depth",
+      rowNumber,
+      templateId,
+      fallback: 1
+    }),
     quality_level: qualityLevel,
-    special_boost: parseBoolean(firstDefined(record.special_boost, base?.special_boost), false),
+    special_boost: parseSpecialBoost(firstDefined(record.special_boost, base?.special_boost), rowNumber, templateId),
     listings,
     durability_cur: durabilityCur,
     durability_max: durabilityMax
@@ -631,6 +753,46 @@ function detectCsvDelimiter(source) {
   return semis > commas ? ";" : ",";
 }
 
+function pushCsvField(row, field) {
+  if (field.length > MAX_CSV_FIELD_LENGTH) {
+    throw new Error(`CSV fields must be ${MAX_CSV_FIELD_LENGTH} characters or fewer.`);
+  }
+  if (CONTROL_CHAR_PATTERN.test(field) || /[\r\n]/.test(field)) {
+    throw new Error("CSV fields cannot contain control characters or line breaks.");
+  }
+  row.push(field);
+}
+
+function canonicalizeCsvHeaders(rawHeaders, dataRows) {
+  const headers = [];
+  const seen = new Set();
+  for (let i = 0; i < rawHeaders.length; i += 1) {
+    const raw = String(rawHeaders[i] ?? "");
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      for (let r = 0; r < dataRows.length; r += 1) {
+        if (String(dataRows[r]?.[i] ?? "").trim() !== "") {
+          throw new Error("CSV has a value in a column with no header. Remove extra columns.");
+        }
+      }
+      headers.push("");
+      continue;
+    }
+    if (!HEADER_NAME_PATTERN.test(trimmed) || FORMULA_PREFIX_PATTERN.test(trimmed) || UNSAFE_NAME_TOKEN_PATTERN.test(trimmed)) {
+      throw new Error(`CSV has an unsupported column "${trimmed.slice(0, 40)}".`);
+    }
+    const key = normalizeCsvHeader(trimmed);
+    if (!SEED_PLAN_ROW_KEYS.has(key)) {
+      throw new Error(`CSV has an unsupported column "${trimmed}". Only seed-plan name and number fields can be imported.`);
+    }
+    if (seen.has(key)) throw new Error(`CSV has a duplicate ${key} column.`);
+    seen.add(key);
+    headers.push(key);
+  }
+  if (!seen.has("template_id")) throw new Error("CSV must include a template_id column.");
+  return headers;
+}
+
 function normalizeCsvHeader(value) {
   const key = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   return CSV_HEADER_ALIASES[key] || key;
@@ -638,10 +800,16 @@ function normalizeCsvHeader(value) {
 
 function rowToRecord(headers, values) {
   const record = {};
-  for (let i = 0; i < headers.length; i += 1) {
+  for (let i = 0; i < Math.max(headers.length, values.length); i += 1) {
     const header = headers[i];
-    if (!header) continue;
-    record[header] = values[i] ?? "";
+    const value = values[i] ?? "";
+    if (!header) {
+      if (String(value).trim() !== "") {
+        throw new Error("CSV has extra values past the header columns. Remove extra columns.");
+      }
+      continue;
+    }
+    record[header] = value;
   }
   return record;
 }
@@ -657,16 +825,90 @@ function firstDefined(...values) {
   return undefined;
 }
 
-function parseBoolean(value, fallback) {
-  if (value === true || value === false) return value;
-  const text = String(value || "").trim().toLowerCase();
-  if (text === "true" || text === "1" || text === "yes") return true;
-  if (text === "false" || text === "0" || text === "no") return false;
-  return fallback;
+function assertValidTemplateId(templateId, rowNumber) {
+  if (!TEMPLATE_ID_PATTERN.test(templateId) || SQL_KEYWORD_PATTERN.test(templateId) || FORMULA_PREFIX_PATTERN.test(templateId)) {
+    throw new Error(`CSV row ${rowNumber} has an invalid template_id. Use letters, numbers, and underscores only.`);
+  }
+  if (templateId.length > MAX_TEMPLATE_ID_LENGTH) {
+    throw new Error(`CSV row ${rowNumber} has an invalid template_id.`);
+  }
 }
 
-function clampInt(value, fallback, min, max) {
+function parseDisplayName(value, templateId, rowNumber) {
+  const name = String(value || templateId).trim();
+  if (!name) throw new Error(`CSV row ${rowNumber} (${templateId}) is missing display_name.`);
+  if (name.length > MAX_DISPLAY_NAME_LENGTH) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) display_name is too long.`);
+  }
+  if (
+    FORMULA_PREFIX_PATTERN.test(name)
+    || UNSAFE_NAME_TOKEN_PATTERN.test(name)
+    || CONTROL_CHAR_PATTERN.test(name)
+    || SQL_KEYWORD_PATTERN.test(name)
+    || !DISPLAY_NAME_PATTERN.test(name)
+  ) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) display_name can only contain letters, numbers, spaces, hyphen, period, and apostrophe.`);
+  }
+  return name;
+}
+
+function parseKind(value, rowNumber, templateId) {
+  const kind = String(value || "equippable").trim().toLowerCase();
+  if (!ALLOWED_KIND_SET.has(kind)) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) has an invalid kind.`);
+  }
+  return kind;
+}
+
+function parseSpecialBoost(value, rowNumber, templateId) {
+  if (value === undefined || value === null || String(value).trim() === "") return false;
+  if (value === true || value === false) return value;
+  const text = String(value).trim().toLowerCase();
+  if (text === "true" || text === "1" || text === "yes") return true;
+  if (text === "false" || text === "0" || text === "no") return false;
+  throw new Error(`CSV row ${rowNumber} (${templateId}) special_boost must be true or false.`);
+}
+
+function parseOptionalInt(value, { min, max, field, rowNumber, templateId, fallback }) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+  return parseStrictInt(value, { min, max, field, rowNumber, templateId });
+}
+
+function parseStrictInt(value, { min, max, field, rowNumber, templateId }) {
+  const text = String(value).trim();
+  if (!INTEGER_PATTERN.test(text)) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) has an invalid ${field}. Use a whole number only.`);
+  }
+  const number = Number(text);
+  if (!Number.isSafeInteger(number) || number < min || number > max) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) ${field} must be between ${min} and ${max}.`);
+  }
+  return number;
+}
+
+function parseDurability(value, { field, rowNumber, templateId, fallback }) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  const text = String(value).trim();
+  if (!DURABILITY_PATTERN.test(text)) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) has an invalid ${field}. Use a whole number only.`);
+  }
+  const number = Number(text);
+  if (!Number.isFinite(number) || number < 100 || number > 200) {
+    throw new Error(`CSV row ${rowNumber} (${templateId}) ${field} must be between 100 and 200.`);
+  }
+  return Math.trunc(number);
+}
+
+function bundledInt(value, fallback, min, max) {
   const number = Math.trunc(Number(value));
   if (!Number.isFinite(number)) return Math.min(Math.max(fallback, min), max);
   return Math.min(Math.max(number, min), max);
+}
+
+function sanitizeImportedFileName(fileName) {
+  const base = String(fileName || "").replace(/^.*[/\\]/, "").slice(0, 120);
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
+  return (cleaned || "seed-plan.csv").slice(0, 80);
 }

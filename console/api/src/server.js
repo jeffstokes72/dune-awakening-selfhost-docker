@@ -51,7 +51,7 @@ import { EDA_EXCHANGE_BOT_ADDON_ID, ADDON_SCHEDULER_PERMISSION, createAddonJobSc
 import { createPublicDirectoryReporter, normalizeDiscordInvite, readDirectorySettings } from "./services/publicDirectory.js";
 import { choamTerminalOverview, installChoamTerminals, removeChoamTerminals } from "./services/choamTerminals.js";
 import { exchangeStats, listExchangeItems, listExchangeListings, readExchangeConfig, saveExchangeConfig } from "./services/exchange.js";
-import { listMarketExchanges, marketBotStatus, saveMarketBuybackSchedule, saveMarketSeedSchedule, exportMarketSeedPlanCsv, importMarketSeedPlanFromCsv, renameMarketSeedPlan, setActiveMarketSeedPlan } from "./services/exchangeMarket.js";
+import { listMarketExchanges, marketBotStatus, saveMarketBuybackSchedule, saveMarketSeedSchedule, decodeSeedPlanCsvUpload, exportMarketSeedPlanCsv, importMarketSeedPlanFromCsv, renameMarketSeedPlan, setActiveMarketSeedPlan } from "./services/exchangeMarket.js";
 import { loadMarketSeedPlan } from "./addonSeedJob.js";
 import { readMarketItemOverrides, saveMarketItemOverrides, readUnsafeTemplateIds, listBotItemCatalogPickerItems, getOverrideRow } from "./services/marketItemOverrides.js";
 import { autoRefillPublicState, createAutoRefillScheduler, setBaseAutoRefill } from "./services/autoRefill.js";
@@ -1490,11 +1490,9 @@ async function marketSeedPlanCsvUploadRoute(req, res) {
     const file = form.files.find((entry) => entry.fieldName === "file") || form.files[0];
     if (!file?.content?.length) return json(res, 400, { error: "Select a CSV file to import as a seed plan." });
     const fileName = basename(file.fileName || "seed-plan.csv");
-    if (fileName && !/\.(csv|txt)$/i.test(fileName)) {
-      return json(res, 400, { error: "Seed plan uploads must be CSV files." });
-    }
+    const csvText = decodeSeedPlanCsvUpload(file.content, fileName);
     const result = importMarketSeedPlanFromCsv(config, {
-      csvText: Buffer.isBuffer(file.content) ? file.content.toString("utf8") : String(file.content || ""),
+      csvText,
       name: form.fields.name,
       planId: form.fields.planId,
       fileName

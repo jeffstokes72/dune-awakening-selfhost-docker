@@ -112,9 +112,11 @@ Exchange Bot addon drives through the scheduler bridge, now first-class):
   overwritten; custom plans live in `runtime/generated/market-bot/plans/`. CSV
   columns are `template_id`, `display_name`, `kind`, `stack_size`, `price`,
   `category_mask`, `category_depth`, `quality_level`, `special_boost`,
-  `listings`, `durability_cur`, and `durability_max`. Missing fields are filled
-  from the bundled catalog; a `template_id` without a grade expands every
-  bundled grade of that item. Unsafe template ids are rejected.
+  `listings`, `durability_cur`, and `durability_max`. Uploads must be UTF-8 CSV
+  with only those columns: extra metadata, SQL/JSON/HTML, spreadsheet formulas,
+  and non-numeric cells are rejected. Missing fields are filled from the bundled
+  catalog; a `template_id` without a grade expands every bundled grade of that
+  item. Unsafe template ids are rejected.
 - **Category multipliers** (1–5x, default 1 = no change) additionally scale the
   seeded prices of three endgame categories on top of the base price multiplier:
   **augments & augment schematics** (matched by template, so the augment pricing

@@ -14,6 +14,7 @@ import {
   type MarketSeedPlanInfo
 } from "../../api/marketBot";
 import { InfoTooltip } from "../../components/common/DisplayPrimitives";
+import { invalidSeedPlanCsvMessage } from "./seedPlanCsvGuard";
 
 // Console-managed NPC market bot (EDA Exchange Bot engine, first-class):
 // seed the CHOAM exchange with NPC sell listings from the active named seed
@@ -550,6 +551,19 @@ export function MarketBotOverlay({ onClose, onError, confirmAction }: MarketBotO
       if (csvInputRef.current) csvInputRef.current.value = "";
       return;
     }
+    try {
+      const text = await file.text();
+      const invalid = invalidSeedPlanCsvMessage(file.name || "", text);
+      if (invalid) {
+        onError(invalid);
+        if (csvInputRef.current) csvInputRef.current.value = "";
+        return;
+      }
+    } catch {
+      onError("The selected file could not be read as CSV.");
+      if (csvInputRef.current) csvInputRef.current.value = "";
+      return;
+    }
     await run("upload-csv", async () => {
       const form = new FormData();
       form.append("file", file);
@@ -599,7 +613,7 @@ export function MarketBotOverlay({ onClose, onError, confirmAction }: MarketBotO
           <div className="market-bot-shell">
             <div className="market-bot-context">
               <div className="market-bot-plan-manager">
-                <SectionTitle title="Seed Plans" id="market-bot-plans-help" help="Named seed plans are CSV-backed lists the Market Bot can stock. The bundled catalog stays read-only. Set one plan as active to use it for reseeds and buyback price caps. Download CSV exports the selected plan; Upload CSV imports a list from your computer as the current seeding list." />
+                <SectionTitle title="Seed Plans" id="market-bot-plans-help" help="Named seed plans are CSV-backed lists the Market Bot can stock. The bundled catalog stays read-only. Set one plan as active to use it for reseeds and buyback price caps. Download CSV exports the selected plan; Upload CSV imports a UTF-8 CSV of names and numbers only (no extra columns, SQL, JSON, or formulas)." />
                 <div className="market-bot-grid market-bot-plan-fields">
                   <label className="compact-select">Seed Plan
                     <select aria-label="Seed Plan" value={selectedPlan?.id || ""} onChange={(event) => selectPlan(event.target.value)}>

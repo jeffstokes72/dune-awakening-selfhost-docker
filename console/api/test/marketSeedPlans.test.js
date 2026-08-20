@@ -2,11 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveMarketSeedPlanPath } from "../src/addonJobs.js";
 import {
   BUNDLED_SEED_PLAN_ID,
+  SEED_PLAN_CSV_COLUMNS,
   csvToPlanRows,
+  decodeSeedPlanCsvUpload,
   exportMarketSeedPlanCsv,
   importMarketSeedPlanFromCsv,
   listMarketSeedPlans,
@@ -161,4 +164,66 @@ test("importing an augment schematic also pulls the matching bundled augment ite
   const rows = csvToPlanRows(csv, SAMPLE_PLAN, []);
   assert.ok(rows.some((row) => row.template_id === "T6_Augment_Example_Schematic"));
   assert.ok(rows.some((row) => row.template_id === "T6_Augment_Example" && row.quality_level === 1));
+});
+
+test("CSV import stores only seed-plan columns and fills names from the bundled plan", () => {
+  const shipped = { rows: [{ ...SAMPLE_PLAN.rows[0], notes: "DROP TABLE items", extra: { sql: "1=1" } }] };
+  const rows = csvToPlanRows("template_id,price\nWaterBottle,1500\n", shipped, []);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].display_name, "Water Bottle");
+  assert.equal(rows[0].price, 1500);
+  assert.deepEqual(Object.keys(rows[0]).sort(), [...SEED_PLAN_CSV_COLUMNS].sort());
+  assert.equal("notes" in rows[0], false);
+  assert.equal("extra" in rows[0], false);
+});
+
+test("CSV import rejects extra columns, SQL payloads, formulas, and non-numeric cells", () => {
+  assert.throws(() => csvToPlanRows("template_id,price,notes\nWaterBottle,10,keep\n", SAMPLE_PLAN, []), /unsupported column/);
+  assert.throws(
+    () => csvToPlanRows("template_id,price\nWaterBottle'; DROP TABLE items;--,10\n", SAMPLE_PLAN, []),
+    /invalid template_id/
+  );
+  assert.throws(() => csvToPlanRows("template_id,price\nDROP,10\n", SAMPLE_PLAN, []), /invalid template_id/);
+  assert.throws(() => csvToPlanRows("template_id,price\nWaterBottle,10 OR 1=1\n", SAMPLE_PLAN, []), /invalid price/);
+  assert.throws(() => csvToPlanRows("template_id,price\nWaterBottle,10; DROP\n", SAMPLE_PLAN, []), /invalid price/);
+  assert.throws(() => csvToPlanRows("template_id,price\nWaterBottle,1e6\n", SAMPLE_PLAN, []), /invalid price/);
+  assert.throws(() => csvToPlanRows("template_id,stack_size,price\nWaterBottle,10; DROP,1000\n", SAMPLE_PLAN, []), /invalid stack_size/);
+  assert.throws(() => csvToPlanRows("template_id,kind,price\nWaterBottle,not-a-kind,1000\n", SAMPLE_PLAN, []), /invalid kind/);
+  assert.throws(
+    () => csvToPlanRows("template_id,display_name,price\nWaterBottle,=1+1,1000\n", SAMPLE_PLAN, []),
+    /display_name/
+  );
+  assert.throws(
+    () => csvToPlanRows("INSERT INTO items VALUES ('WaterBottle',10);\n", SAMPLE_PLAN, []),
+    /SQL script/
+  );
+  assert.throws(() => csvToPlanRows("{\"rows\":[]}\n", SAMPLE_PLAN, []), /JSON or HTML/);
+  assert.throws(() => csvToPlanRows("<html><body>template_id</body></html>\n", SAMPLE_PLAN, []), /JSON or HTML/);
+  assert.throws(() => csvToPlanRows("template_id,price\nWaterBottle\u0000,10\n", SAMPLE_PLAN, []), /binary data/);
+  assert.throws(
+    () => decodeSeedPlanCsvUpload(Buffer.from("template_id,price\nWaterBottle,10\n"), "plan.sql"),
+    /CSV files/
+  );
+  assert.throws(
+    () => decodeSeedPlanCsvUpload(Buffer.from([0xff, 0xfe, 0x74, 0x00]), "plan.csv"),
+    /UTF-8/
+  );
+  assert.throws(
+    () => decodeSeedPlanCsvUpload(Buffer.from("template_id,price\nWaterBottle,\x00\n", "utf8"), "plan.csv"),
+    /binary data/
+  );
+});
+
+test("CSV import accepts apostrophes, durability tenths, and the bundled catalog round-trip", () => {
+  const named = csvToPlanRows("template_id,display_name,price\nWaterBottle,Abulurd's Rapture,10\n", SAMPLE_PLAN, []);
+  assert.equal(named[0].display_name, "Abulurd's Rapture");
+  const durable = csvToPlanRows("template_id,durability_cur,durability_max,price\nWaterBottle,188.0,188.0,1000\n", SAMPLE_PLAN, []);
+  assert.equal(durable[0].durability_cur, 188);
+  assert.equal(durable[0].durability_max, 188);
+
+  const bundledPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../runtime/data/market-seed-plan.json");
+  const bundled = JSON.parse(readFileSync(bundledPath, "utf8"));
+  const rows = csvToPlanRows(stringifySeedPlanCsv(bundled.rows), bundled, bundled.unsafe_template_ids || []);
+  assert.equal(rows.length, bundled.rows.length);
+  assert.deepEqual(Object.keys(rows[0]).sort(), [...SEED_PLAN_CSV_COLUMNS].sort());
 });
