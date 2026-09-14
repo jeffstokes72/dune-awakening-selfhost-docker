@@ -5,12 +5,17 @@
   "terminals": [
     {
       "name": "console-api",
-      "command": ".cursor/run-console.sh"
+      "command": ".cursor/run-console.sh",
+      "description": "Dune Docker Console API in mock mode, serving the built web UI on port 8088."
     },
     {
       "name": "web-dev",
-      "command": "cd console/web && VITE_API_TARGET=http://127.0.0.1:8088 npm run dev"
+      "command": "cd console/web && VITE_API_TARGET=http://127.0.0.1:8088 npm run dev",
+      "description": "Vite dev server on port 5173 with hot reload, proxying /api to the console API."
     }
   ],
-  "ports": [8088, 5173, 15432]
+  "ports": [
+    { "name": "console", "port": 8088 },
+    { "name": "web-dev", "port": 5173 }
+  ]
 }
