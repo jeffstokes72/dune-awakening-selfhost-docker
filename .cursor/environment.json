@@ -1,0 +1,16 @@
+{
+  "name": "Dune Docker Console",
+  "install": ".cursor/install.sh",
+  "start": ".cursor/start.sh",
+  "terminals": [
+    {
+      "name": "console-api",
+      "command": ".cursor/run-console.sh"
+    },
+    {
+      "name": "web-dev",
+      "command": "cd console/web && VITE_API_TARGET=http://127.0.0.1:8088 npm run dev"
+    }
+  ],
+  "ports": [8088, 5173, 15432]
+}
